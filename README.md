@@ -1,73 +1,58 @@
-# React + TypeScript + Vite
+# Command & Control
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Command & Control is a local control surface for OpenClaw.
 
-Currently, two official plugins are available:
+The goal is to give Steve a browser-based side panel app that can manage memory, tasks, agents, system state, and later visual pipelines for AI-driven workflows.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Current direction
 
-## React Compiler
+Command & Control is shaping into five main concepts:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **Memory** — context and recall
+- **Tasks** — executable jobs and scheduled work
+- **Agents** — live OpenClaw sessions plus agent profiles
+- **System** — runtime health, logs, and status
+- **Pipelines** — future visual orchestration layer for connecting tasks and agents
 
-## Expanding the ESLint configuration
+## Current stack
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+- **Frontend:** React + Vite + TypeScript
+- **Backend:** FastAPI
+- **Database:** SQLite
+- **Runtime integration:** OpenClaw bridge via local CLI calls
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## What works today
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+- Memory ingestion from workspace markdown files into SQLite
+- Task creation, execution, enable/disable, deletion, and run history
+- OpenClaw-backed System page with health, status, sessions, and logs
+- Agents page with live session visibility and editable agent profiles
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Near-term roadmap
+
+- Repair and complete task editing UI
+- Rename Projects to Pipelines in the UI
+- Build Pipelines v1 as a real backend/UI model
+- Add Secrets for authenticated integrations
+- Add usage monitoring for providers like OpenAI and Anthropic
+- Connect external apps and workflow services cleanly over time
+
+## Running locally
+
+From the project directory:
+
+```bash
+./scripts/start-all.sh
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Stop everything with:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+./scripts/stop-all.sh
 ```
+
+Frontend:
+- `http://localhost:4173/`
+
+Backend:
+- `http://localhost:8000/`
