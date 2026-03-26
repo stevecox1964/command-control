@@ -2,17 +2,18 @@
 
 Command & Control is a local control surface for OpenClaw.
 
-The goal is to give Steve a browser-based side panel app that can manage memory, tasks, agents, system state, and later visual pipelines for AI-driven workflows.
+The goal is to give Steve a browser-based side panel app that can manage memory, tasks, agents, system state, settings, and later visual workflows for AI-driven orchestration.
 
 ## Current direction
 
-Command & Control is shaping into five main concepts:
+Command & Control is shaping into six main concepts:
 
 - **Memory** — context and recall
 - **Tasks** — executable jobs and scheduled work
 - **Agents** — live OpenClaw sessions plus agent profiles
 - **System** — runtime health, logs, and status
-- **Pipelines** — future visual orchestration layer for connecting tasks and agents
+- **Workflows** — future orchestration layer for multi-step task and agent sequences
+- **Settings** — future home for configuration, provider options, and secrets
 
 ## Current stack
 
@@ -24,17 +25,18 @@ Command & Control is shaping into five main concepts:
 ## What works today
 
 - Memory ingestion from workspace markdown files into SQLite
-- Task creation, execution, enable/disable, deletion, and run history
+- Task creation, editing, execution, enable/disable, deletion, and run history
 - OpenClaw-backed System page with health, status, sessions, and logs
 - Agents page with live session visibility and editable agent profiles
+- Workflows placeholder module in the UI (renamed from Projects)
+- Settings page as the future home for secrets and provider configuration
 
 ## Near-term roadmap
 
-- Repair and complete task editing UI
-- Rename Projects to Pipelines in the UI
-- Build Pipelines v1 as a real backend/UI model
+- Build Workflows v1 as a real backend/UI model
 - Add Secrets for authenticated integrations
 - Add usage monitoring for providers like OpenAI and Anthropic
+- Add deeper OpenClaw control actions through the bridge
 - Connect external apps and workflow services cleanly over time
 
 ## Running locally

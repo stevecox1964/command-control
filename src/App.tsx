@@ -157,29 +157,29 @@ const modules: ModuleConfig[] = [
     ],
   },
   {
-    key: 'projects',
-    label: 'Projects',
-    path: '/projects',
-    eyebrow: 'Build',
-    title: 'Projects',
-    description: 'Track products, repos, local workspaces, milestones, and project-specific memory.',
-    primaryAction: 'New Project',
-    secondaryAction: 'Open Workspace',
+    key: 'workflows',
+    label: 'Workflows',
+    path: '/workflows',
+    eyebrow: 'Flow',
+    title: 'Workflows',
+    description: 'Define future multi-step workflows that will orchestrate sequences of tasks and agents.',
+    primaryAction: 'New Workflow',
+    secondaryAction: 'Open Workflow',
     cards: [
-      { title: 'Active Projects', value: '1', note: 'Command & Control' },
-      { title: 'Repos Linked', value: '0', note: 'local-only for now' },
-      { title: 'Milestones', value: '3', note: 'shell, memory, runtime' },
+      { title: 'Workflows', value: '2', note: 'early concepts only' },
+      { title: 'Sequences', value: '0', note: 'not built yet' },
+      { title: 'Milestones', value: '3', note: 'tasks, agents, settings' },
     ],
-    listTitle: 'Project List',
+    listTitle: 'Workflow List',
     listItems: [
-      { name: 'Command & Control', meta: 'React + Vite shell', status: 'Active' },
-      { name: 'Memory Enhancements', meta: 'planned feature track', status: 'Planned' },
-      { name: 'GitHub hookup', meta: 'later', status: 'Deferred' },
+      { name: 'Research → Distill → Package', meta: 'future orchestration flow', status: 'Planned' },
+      { name: 'Usage Monitor → Pause', meta: 'control flow', status: 'Draft' },
+      { name: 'Video Harvest → Summary', meta: 'external integration later', status: 'Planned' },
     ],
-    detailTitle: 'Projects workspace stub',
+    detailTitle: 'Workflows control stub',
     detailText: [
-      'Projects should likely become the umbrella for code work, repo links, local directories, and milestones.',
-      'Could also expose project-specific notes and agent context later.',
+      'Workflows will become the place where sequences of tasks and agents are stitched together into real execution flows.',
+      'For now this is still a placeholder until the workflow model is implemented properly.',
     ],
   },
   {
@@ -223,6 +223,33 @@ const modules: ModuleConfig[] = [
       'Could later include docs previews, recent references, and saved snippets.',
     ],
   },
+  {
+    key: 'settings',
+    label: 'Settings',
+    path: '/settings',
+    eyebrow: 'Config',
+    title: 'Settings',
+    description: 'Control app configuration, provider options, and the future home for secrets and credentials.',
+    primaryAction: 'Add Setting',
+    secondaryAction: 'Refresh',
+    cards: [
+      { title: 'Secrets', value: 'Soon', note: 'future secure storage' },
+      { title: 'Providers', value: '2+', note: 'OpenAI / Anthropic later' },
+      { title: 'Runtime', value: 'Local', note: 'VM-hosted for now' },
+    ],
+    listTitle: 'Settings Rows',
+    listItems: [
+      { name: 'OpenAI Usage Monitor', meta: 'future authenticated integration', status: 'Planned' },
+      { name: 'Anthropic Usage Monitor', meta: 'future authenticated integration', status: 'Planned' },
+      { name: 'Secrets Vault', meta: 'future secure key storage', status: 'Planned' },
+    ],
+    detailTitle: 'Settings and secrets stub',
+    detailText: [
+      'This page will become the configuration surface for providers, credentials, toggles, and runtime behavior.',
+      'It is the natural future home for Secrets once we build secure storage and editing.',
+    ],
+  },
+
   {
     key: 'system',
     label: 'System',
@@ -521,6 +548,7 @@ function TasksPage() {
       setNotice('Task updated')
       setShowEditModal(false)
       setForm(emptyForm)
+      setSelectedId(selectedTask.id)
       await loadTasks()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update task')
@@ -550,7 +578,7 @@ function TasksPage() {
     try {
       await deleteTask(taskId)
       setNotice('Task deleted')
-      setSelectedId(null)
+      setSelectedId(nextTask?.id ?? previousTask?.id ?? null)
       await loadTasks()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete task')

@@ -566,9 +566,13 @@ def row_to_task_run(row: sqlite3.Row) -> TaskRunRecord:
     return TaskRunRecord(**dict(row))
 
 
-def compute_next_run(task: TaskRecord | sqlite3.Row) -> str | None:
-    interval = task['interval_minutes'] if isinstance(task, sqlite3.Row) else task.interval_minutes
-    enabled = bool(task['enabled']) if isinstance(task, sqlite3.Row) else task.enabled
+def compute_next_run(task: TaskRecord | sqlite3.Row | dict) -> str | None:
+    if isinstance(task, sqlite3.Row) or isinstance(task, dict):
+        interval = task['interval_minutes']
+        enabled = bool(task['enabled'])
+    else:
+        interval = task.interval_minutes
+        enabled = task.enabled
     if not enabled or not interval:
         return None
     return datetime.fromtimestamp(time.time() + (interval * 60), timezone.utc).isoformat()
