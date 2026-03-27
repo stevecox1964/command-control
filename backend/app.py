@@ -17,7 +17,11 @@ from urllib.request import urlopen
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+import anthropic
+import openai
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = PROJECT_ROOT.parent
@@ -160,6 +164,18 @@ class AgentProfileRecord(AgentProfileBase):
     updated_at: str
 
 
+class ChatMessageRecord(BaseModel):
+    id: int
+    profile_id: int
+    role: str
+    content: str
+    created_at: str
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=32000)
+
+
 @dataclass
 class SourceFile:
     path: Path
@@ -275,6 +291,15 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                profile_id INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (profile_id) REFERENCES agent_profiles (id) ON DELETE CASCADE
+            );
             '''
         )
         seed_tasks(conn)
@@ -293,7 +318,7 @@ def seed_agent_profiles(conn: sqlite3.Connection) -> None:
             'role': 'Primary operator and builder',
             'purpose': 'Acts as the main assistant inside OpenClaw and Command & Control.',
             'status': 'live',
-            'preferred_model': 'gpt-5.4',
+            'preferred_model': 'claude-sonnet-4-6',
             'notes': 'General purpose, orchestration, coding, planning.',
             'capability': 'Core chat, planning, coding, orchestration',
         },
@@ -302,7 +327,7 @@ def seed_agent_profiles(conn: sqlite3.Connection) -> None:
             'role': 'Source scanner',
             'purpose': 'Scan YouTube, Reddit, and other inputs for high-signal material.',
             'status': 'planned',
-            'preferred_model': 'gpt-5.4',
+            'preferred_model': 'claude-sonnet-4-6',
             'notes': 'Great candidate for future automation and ingestion flows.',
             'capability': 'Discovery and collection',
         },
@@ -311,7 +336,7 @@ def seed_agent_profiles(conn: sqlite3.Connection) -> None:
             'role': 'Insight extraction',
             'purpose': 'Turn raw source material into distilled insights, summaries, and FAQ seeds.',
             'status': 'planned',
-            'preferred_model': 'gpt-5.4',
+            'preferred_model': 'claude-sonnet-4-6',
             'notes': 'Bridges research to structured output.',
             'capability': 'Summaries, insights, contradictions, FAQs',
         },
@@ -320,7 +345,7 @@ def seed_agent_profiles(conn: sqlite3.Connection) -> None:
             'role': 'Content formatter',
             'purpose': 'Package outputs into publishable social assets and structured content bundles.',
             'status': 'planned',
-            'preferred_model': 'gpt-5.4',
+            'preferred_model': 'claude-sonnet-4-6',
             'notes': 'Later ties into video/social pipelines.',
             'capability': 'Hooks, captions, posts, snippets',
         },
@@ -1002,4 +1027,159 @@ def update_agent_profile_route(profile_id: int, profile: AgentProfileUpdate) -> 
 @app.delete('/api/agent-profiles/{profile_id}')
 def delete_agent_profile_route(profile_id: int) -> dict[str, bool]:
     delete_agent_profile(profile_id)
+    return {'ok': True}
+
+
+def build_system_prompt(profile: AgentProfileRecord) -> str:
+    parts = [f'You are {profile.name}.']
+    if profile.role:
+        parts.append(f'Your role: {profile.role}.')
+    if profile.purpose:
+        parts.append(f'Your purpose: {profile.purpose}')
+    if profile.capability:
+        parts.append(f'Your capabilities: {profile.capability}')
+    if profile.notes:
+        parts.append(f'Additional context: {profile.notes}')
+    return ' '.join(parts)
+
+
+def get_chat_history(profile_id: int, limit: int = 50) -> list[ChatMessageRecord]:
+    with connect_db() as conn:
+        rows = conn.execute(
+            'SELECT * FROM chat_messages WHERE profile_id = ? ORDER BY id ASC LIMIT ?',
+            (profile_id, limit),
+        ).fetchall()
+    return [ChatMessageRecord(**dict(row)) for row in rows]
+
+
+def save_chat_message(profile_id: int, role: str, content: str) -> ChatMessageRecord:
+    now = utc_now_iso()
+    with connect_db() as conn:
+        cursor = conn.execute(
+            'INSERT INTO chat_messages (profile_id, role, content, created_at) VALUES (?, ?, ?, ?)',
+            (profile_id, role, content, now),
+        )
+        conn.commit()
+        row = conn.execute('SELECT * FROM chat_messages WHERE id = ?', (cursor.lastrowid,)).fetchone()
+    return ChatMessageRecord(**dict(row))
+
+
+ANTHROPIC_PREFIXES = ('claude-',)
+OPENAI_PREFIXES = ('gpt-', 'o1-', 'o3-', 'o4-', 'chatgpt-')
+DEFAULT_MODEL = 'claude-sonnet-4-6'
+
+KNOWN_MODELS = [
+    {'id': 'claude-sonnet-4-6', 'name': 'Claude Sonnet 4.6', 'vendor': 'anthropic'},
+    {'id': 'claude-opus-4-6', 'name': 'Claude Opus 4.6', 'vendor': 'anthropic'},
+    {'id': 'claude-haiku-4-5-20251001', 'name': 'Claude Haiku 4.5', 'vendor': 'anthropic'},
+    {'id': 'gpt-4o', 'name': 'GPT-4o', 'vendor': 'openai'},
+    {'id': 'gpt-4.1', 'name': 'GPT-4.1', 'vendor': 'openai'},
+    {'id': 'gpt-4.1-mini', 'name': 'GPT-4.1 Mini', 'vendor': 'openai'},
+    {'id': 'o4-mini', 'name': 'o4-mini', 'vendor': 'openai'},
+]
+
+
+def detect_vendor(model: str) -> str:
+    lower = model.lower()
+    if any(lower.startswith(p) for p in ANTHROPIC_PREFIXES):
+        return 'anthropic'
+    if any(lower.startswith(p) for p in OPENAI_PREFIXES):
+        return 'openai'
+    return 'openai'
+
+
+def resolve_model(preferred: str | None) -> tuple[str, str]:
+    model = preferred or DEFAULT_MODEL
+    vendor = detect_vendor(model)
+    return model, vendor
+
+
+def stream_anthropic(model: str, system_prompt: str, messages: list[dict]):
+    client = anthropic.Anthropic()
+    chat_messages = [m for m in messages if m['role'] != 'system']
+    with client.messages.stream(
+        model=model,
+        system=system_prompt,
+        messages=chat_messages,
+        max_tokens=4096,
+    ) as stream:
+        for text in stream.text_stream:
+            yield text
+
+
+def stream_openai(model: str, messages: list[dict]):
+    client = openai.OpenAI()
+    stream = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        stream=True,
+        max_tokens=4096,
+    )
+    for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+
+@app.get('/api/models')
+def list_models() -> list[dict]:
+    return KNOWN_MODELS
+
+
+@app.get('/api/agent-profiles/{profile_id}/chat', response_model=list[ChatMessageRecord])
+def list_chat_messages(profile_id: int) -> list[ChatMessageRecord]:
+    with connect_db() as conn:
+        profile = conn.execute('SELECT * FROM agent_profiles WHERE id = ?', (profile_id,)).fetchone()
+    if profile is None:
+        raise HTTPException(status_code=404, detail='Agent profile not found')
+    return get_chat_history(profile_id)
+
+
+@app.post('/api/agent-profiles/{profile_id}/chat')
+def send_chat_message(profile_id: int, body: ChatRequest):
+    with connect_db() as conn:
+        row = conn.execute('SELECT * FROM agent_profiles WHERE id = ?', (profile_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail='Agent profile not found')
+    profile = row_to_agent_profile(row)
+
+    save_chat_message(profile_id, 'user', body.message)
+
+    history = get_chat_history(profile_id)
+    system_prompt = build_system_prompt(profile)
+    messages = [{'role': 'system', 'content': system_prompt}]
+    for msg in history:
+        messages.append({'role': msg.role, 'content': msg.content})
+
+    model, vendor = resolve_model(profile.preferred_model)
+
+    def stream_response():
+        collected = []
+        try:
+            if vendor == 'anthropic':
+                token_stream = stream_anthropic(model, system_prompt, messages)
+            else:
+                token_stream = stream_openai(model, messages)
+
+            for token in token_stream:
+                collected.append(token)
+                yield f'data: {json.dumps({"token": token})}\n\n'
+
+            full_response = ''.join(collected)
+            saved = save_chat_message(profile_id, 'assistant', full_response)
+            yield f'data: {json.dumps({"done": True, "message": saved.model_dump()})}\n\n'
+        except (openai.APIError, anthropic.APIError) as exc:
+            yield f'data: {json.dumps({"error": str(exc)})}\n\n'
+
+    return StreamingResponse(stream_response(), media_type='text/event-stream')
+
+
+@app.delete('/api/agent-profiles/{profile_id}/chat')
+def clear_chat_history(profile_id: int) -> dict[str, bool]:
+    with connect_db() as conn:
+        profile = conn.execute('SELECT * FROM agent_profiles WHERE id = ?', (profile_id,)).fetchone()
+        if profile is None:
+            raise HTTPException(status_code=404, detail='Agent profile not found')
+        conn.execute('DELETE FROM chat_messages WHERE profile_id = ?', (profile_id,))
+        conn.commit()
     return {'ok': True}

@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, Outlet, Route, Routes } from 'react-router-dom'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import { fetchMemoryDocument, fetchMemoryList, ingestMemory } from './lib/api'
 import { createTask, deleteTask, fetchTaskRuns, fetchTasks, runTask, updateTask } from './lib/tasks'
 import { fetchOcHealth, fetchOcLogs, fetchOcSessions, fetchOcStatus } from './lib/oc'
-import { createAgentProfile, deleteAgentProfile, fetchAgentProfiles, updateAgentProfile } from './lib/agentProfiles'
+import { type ModelOption, createAgentProfile, deleteAgentProfile, fetchAgentProfiles, fetchModels, updateAgentProfile } from './lib/agentProfiles'
+import { type ChatMessage, clearChatHistory, fetchChatHistory, sendChatMessage } from './lib/chat'
 import './App.css'
 
 type StubCard = {
@@ -792,12 +793,19 @@ function AgentsPage() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string>('')
   const [showProfileModal, setShowProfileModal] = useState(false)
+  const [models, setModels] = useState<ModelOption[]>([])
+  const [chatMode, setChatMode] = useState(false)
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
+  const [chatInput, setChatInput] = useState('')
+  const [streaming, setStreaming] = useState(false)
+  const [streamingText, setStreamingText] = useState('')
+  const chatEndRef = useRef<HTMLDivElement>(null)
   const [form, setForm] = useState({
     name: '',
     role: '',
     purpose: '',
     status: 'planned',
-    preferred_model: 'gpt-5.4',
+    preferred_model: 'claude-sonnet-4-6',
     notes: '',
     capability: '',
   })
@@ -805,14 +813,16 @@ function AgentsPage() {
   async function loadAgents() {
     setError(null)
     try {
-      const [sessions, logsPayload, profileData] = await Promise.all([
+      const [sessions, logsPayload, profileData, modelData] = await Promise.all([
         fetchOcSessions(),
         fetchOcLogs(40),
         fetchAgentProfiles(),
+        fetchModels(),
       ])
       setData(sessions)
       setLogs(logsPayload.lines ?? [])
       setProfiles(profileData)
+      setModels(modelData)
       setSelectedSessionKey((current) => current ?? sessions?.sessions?.[0]?.key ?? null)
       setSelectedProfileId((current) => current ?? profileData?.[0]?.id ?? null)
     } catch (err) {
@@ -861,11 +871,86 @@ function AgentsPage() {
       await deleteAgentProfile(selectedProfile.id)
       setNotice('Agent profile deleted')
       setSelectedProfileId(null)
+      setChatMode(false)
       await loadAgents()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete agent profile')
     }
   }
+
+  async function openChat() {
+    if (!selectedProfile) return
+    setChatMode(true)
+    setStreamingText('')
+    try {
+      const history = await fetchChatHistory(selectedProfile.id)
+      setChatMessages(history)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load chat history')
+    }
+  }
+
+  async function handleSendMessage(event: React.FormEvent) {
+    event.preventDefault()
+    if (!selectedProfile || !chatInput.trim() || streaming) return
+    const userMsg = chatInput.trim()
+    setChatInput('')
+    setStreaming(true)
+    setStreamingText('')
+
+    const optimisticUser: ChatMessage = {
+      id: Date.now(),
+      profile_id: selectedProfile.id,
+      role: 'user',
+      content: userMsg,
+      created_at: new Date().toISOString(),
+    }
+    setChatMessages((prev) => [...prev, optimisticUser])
+
+    try {
+      await sendChatMessage(
+        selectedProfile.id,
+        userMsg,
+        (token) => setStreamingText((prev) => prev + token),
+        (savedMsg) => {
+          setChatMessages((prev) => [...prev, savedMsg])
+          setStreamingText('')
+          setStreaming(false)
+        },
+        (errMsg) => {
+          setError(errMsg)
+          setStreaming(false)
+          setStreamingText('')
+        },
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send message')
+      setStreaming(false)
+      setStreamingText('')
+    }
+  }
+
+  async function handleClearChat() {
+    if (!selectedProfile) return
+    try {
+      await clearChatHistory(selectedProfile.id)
+      setChatMessages([])
+      setStreamingText('')
+      setNotice('Chat history cleared')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to clear chat')
+    }
+  }
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [chatMessages, streamingText])
+
+  useEffect(() => {
+    setChatMode(false)
+    setChatMessages([])
+    setStreamingText('')
+  }, [selectedProfileId])
 
   return (
     <section className="page stub-page">
@@ -952,62 +1037,134 @@ function AgentsPage() {
         <Separator className="resize-handle" />
 
         <Panel defaultSize="66%" minSize="40%">
-          <article className="memory-detail stub-detail">
-            <div className="detail-header">
-              <div>
-                <p className="eyebrow">Selected Profile</p>
-                <h3>{selectedProfile?.name ?? 'No profile selected'}</h3>
+          {chatMode && selectedProfile ? (
+            <div className="chat-container">
+              <div className="chat-header">
+                <div className="chat-header-left">
+                  <button className="secondary chat-back-btn" onClick={() => setChatMode(false)}>Back</button>
+                  <div>
+                    <p className="eyebrow">Chat</p>
+                    <h3>{selectedProfile.name}</h3>
+                  </div>
+                </div>
+                <div className="chat-header-actions">
+                  <select
+                    className="chat-model-select"
+                    value={selectedProfile.preferred_model ?? 'claude-sonnet-4-6'}
+                    onChange={(e) => {
+                      void updateAgentProfile(selectedProfile.id, { preferred_model: e.target.value }).then(() => loadAgents())
+                    }}
+                  >
+                    {models.map((m) => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))}
+                  </select>
+                  <button className="secondary" onClick={() => void handleClearChat()}>Clear</button>
+                </div>
               </div>
-              <div className="detail-meta">
-                <span>{selectedProfile?.status ?? '—'}</span>
-                <span>{selectedProfile?.preferred_model ?? '—'}</span>
-                <span>{selectedSession?.agentId ?? 'no live match'}</span>
+
+              <div className="chat-messages">
+                {chatMessages.length === 0 && !streaming && (
+                  <div className="chat-empty">
+                    <p className="chat-empty-name">{selectedProfile.name}</p>
+                    <p>{selectedProfile.purpose ?? selectedProfile.role}</p>
+                    <p className="chat-empty-hint">Send a message to start the conversation.</p>
+                  </div>
+                )}
+                {chatMessages.map((msg) => (
+                  <div key={msg.id} className={`chat-bubble ${msg.role}`}>
+                    <div className="chat-bubble-role">{msg.role === 'user' ? 'You' : selectedProfile.name}</div>
+                    <div className="chat-bubble-content">{msg.content}</div>
+                  </div>
+                ))}
+                {streaming && streamingText && (
+                  <div className="chat-bubble assistant streaming">
+                    <div className="chat-bubble-role">{selectedProfile.name}</div>
+                    <div className="chat-bubble-content">{streamingText}<span className="chat-cursor" /></div>
+                  </div>
+                )}
+                {streaming && !streamingText && (
+                  <div className="chat-bubble assistant streaming">
+                    <div className="chat-bubble-role">{selectedProfile.name}</div>
+                    <div className="chat-bubble-content"><span className="chat-typing">Thinking...</span></div>
+                  </div>
+                )}
+                <div ref={chatEndRef} />
               </div>
-            </div>
-            <div className="detail-body">
-              <div className="task-action-row">
-                <button className="secondary" onClick={() => void handlePromoteProfile()} disabled={!selectedProfile}>
-                  {selectedProfile?.status === 'live' ? 'Mark Planned' : 'Mark Live'}
+
+              <form className="chat-input-bar" onSubmit={handleSendMessage}>
+                <input
+                  className="chat-input"
+                  placeholder={`Message ${selectedProfile.name}...`}
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  disabled={streaming}
+                  autoFocus
+                />
+                <button className="primary chat-send" type="submit" disabled={streaming || !chatInput.trim()}>
+                  Send
                 </button>
-                <button className="secondary danger" onClick={() => void handleDeleteProfile()} disabled={!selectedProfile}>Delete Profile</button>
-              </div>
-
-              <section>
-                <h4>Profile definition</h4>
-                {selectedProfile ? (
-                  <ul>
-                    <li>Role: {selectedProfile.role}</li>
-                    <li>Purpose: {selectedProfile.purpose ?? '—'}</li>
-                    <li>Capability: {selectedProfile.capability ?? '—'}</li>
-                    <li>Preferred model: {selectedProfile.preferred_model ?? '—'}</li>
-                    <li>Notes: {selectedProfile.notes ?? '—'}</li>
-                  </ul>
-                ) : (
-                  <p>No profile selected.</p>
-                )}
-              </section>
-
-              <section>
-                <h4>Selected live session</h4>
-                {selectedSession ? (
-                  <ul>
-                    <li>Session ID: {selectedSession.sessionId}</li>
-                    <li>Total tokens: {selectedSession.totalTokens}</li>
-                    <li>Context window: {selectedSession.contextTokens}</li>
-                    <li>Provider: {selectedSession.modelProvider}</li>
-                    <li>Last activity age: {Math.round((selectedSession.ageMs ?? 0) / 1000)}s</li>
-                  </ul>
-                ) : (
-                  <p>No session data available.</p>
-                )}
-              </section>
-
-              <section>
-                <h4>Agent / runtime logs</h4>
-                <pre className="memory-content">{logs.length ? logs.join('\n') : 'No logs loaded'}</pre>
-              </section>
+              </form>
             </div>
-          </article>
+          ) : (
+            <article className="memory-detail stub-detail">
+              <div className="detail-header">
+                <div>
+                  <p className="eyebrow">Selected Profile</p>
+                  <h3>{selectedProfile?.name ?? 'No profile selected'}</h3>
+                </div>
+                <div className="detail-meta">
+                  <span>{selectedProfile?.status ?? '—'}</span>
+                  <span>{selectedProfile?.preferred_model ?? '—'}</span>
+                  <span>{selectedSession?.agentId ?? 'no live match'}</span>
+                </div>
+              </div>
+              <div className="detail-body">
+                <div className="task-action-row">
+                  <button className="primary" onClick={() => void openChat()} disabled={!selectedProfile}>Chat</button>
+                  <button className="secondary" onClick={() => void handlePromoteProfile()} disabled={!selectedProfile}>
+                    {selectedProfile?.status === 'live' ? 'Mark Planned' : 'Mark Live'}
+                  </button>
+                  <button className="secondary danger" onClick={() => void handleDeleteProfile()} disabled={!selectedProfile}>Delete Profile</button>
+                </div>
+
+                <section>
+                  <h4>Profile definition</h4>
+                  {selectedProfile ? (
+                    <ul>
+                      <li>Role: {selectedProfile.role}</li>
+                      <li>Purpose: {selectedProfile.purpose ?? '—'}</li>
+                      <li>Capability: {selectedProfile.capability ?? '—'}</li>
+                      <li>Preferred model: {selectedProfile.preferred_model ?? '—'}</li>
+                      <li>Notes: {selectedProfile.notes ?? '—'}</li>
+                    </ul>
+                  ) : (
+                    <p>No profile selected.</p>
+                  )}
+                </section>
+
+                <section>
+                  <h4>Selected live session</h4>
+                  {selectedSession ? (
+                    <ul>
+                      <li>Session ID: {selectedSession.sessionId}</li>
+                      <li>Total tokens: {selectedSession.totalTokens}</li>
+                      <li>Context window: {selectedSession.contextTokens}</li>
+                      <li>Provider: {selectedSession.modelProvider}</li>
+                      <li>Last activity age: {Math.round((selectedSession.ageMs ?? 0) / 1000)}s</li>
+                    </ul>
+                  ) : (
+                    <p>No session data available.</p>
+                  )}
+                </section>
+
+                <section>
+                  <h4>Agent / runtime logs</h4>
+                  <pre className="memory-content">{logs.length ? logs.join('\n') : 'No logs loaded'}</pre>
+                </section>
+              </div>
+            </article>
+          )}
         </Panel>
       </Group>
 
@@ -1027,7 +1184,11 @@ function AgentsPage() {
                 <option value="live">live</option>
                 <option value="draft">draft</option>
               </select>
-              <input className="section-search" placeholder="Preferred model" value={form.preferred_model} onChange={(e) => setForm({ ...form, preferred_model: e.target.value })} />
+              <select className="section-search" value={form.preferred_model} onChange={(e) => setForm({ ...form, preferred_model: e.target.value })}>
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name} ({m.vendor})</option>
+                ))}
+              </select>
               <input className="section-search" placeholder="Capability" value={form.capability} onChange={(e) => setForm({ ...form, capability: e.target.value })} />
               <textarea className="section-search task-textarea" placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
               <button className="primary task-submit" type="submit">Create Profile</button>

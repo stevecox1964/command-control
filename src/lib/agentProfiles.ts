@@ -43,3 +43,15 @@ export async function deleteAgentProfile(profileId: number): Promise<void> {
   const response = await fetch(`${API_BASE}/api/agent-profiles/${profileId}`, { method: 'DELETE' })
   if (!response.ok) throw new Error('Failed to delete agent profile')
 }
+
+export type ModelOption = {
+  id: string
+  name: string
+  vendor: string
+}
+
+export async function fetchModels(): Promise<ModelOption[]> {
+  const response = await fetch(`${API_BASE}/api/models`)
+  if (!response.ok) throw new Error('Failed to fetch models')
+  return response.json()
+}
