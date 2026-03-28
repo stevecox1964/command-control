@@ -18,6 +18,12 @@ Instead, build a **hub / bus** so multiple agents can coordinate cleanly while k
 - **CC (Command & Control)** = UI / control surface / operator dashboard
 - **Hub / Bus** = coordination layer between agents
 
+## Interface Stance
+
+- **CC should be the primary place Steve talks to agents**
+- **Telegram should be fallback / remote / notification infrastructure**, not the center of the product
+- Long term, a dedicated mobile app is more product-aligned than forcing Telegram to carry the main UX
+
 ## What the Hub Should Handle
 
 ### 1. Tasks

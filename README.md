@@ -24,6 +24,23 @@ That means future Settings, Agents, and model management screens should act as a
 - session history and session messaging
 - gateway-backed chat and runtime status
 
+## Product Principle: CC First
+
+A core product decision is becoming clear:
+
+- **CC should be the primary operator chat surface**
+- **Telegram should be secondary**: fallback access, remote control, notifications, and mobile backup
+
+The reason is simple: setting up Telegram is useful infrastructure, but it is not the product. The product value shows up when the operator can:
+
+- open CC
+- pick an agent
+- chat immediately
+- keep history
+- stay inside one workspace with status, tasks, memory, and future workflows nearby
+
+Long term, a dedicated mobile app makes more product sense than treating Telegram as the main experience.
+
 ## What Exists Now
 
 ### Memory
@@ -194,6 +211,7 @@ Default local ports:
 - Persistent chat history across page refreshes and reloads
 - Better session browsing and history tools when needed, without letting monitoring UI crowd the chat workspace
 - Workflow and pipeline orchestration UI
+- Stabilize CC as the primary daily chat surface before investing in Telegram-heavy flows or a mobile shell
 
 ## Product Constraint Worth Keeping
 
