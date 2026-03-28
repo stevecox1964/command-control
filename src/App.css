@@ -513,56 +513,90 @@
 
 /* ── Agents Page ── */
 
-.agents-page .memory-panels {
-  /* Fill the remaining viewport below the page header + notices */
-  min-height: 0;
-  height: calc(100vh - 200px);
-}
-
-.agents-sidebar {
+.agents-layout {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  height: 100%;
-  overflow: hidden;
+  gap: 10px;
+  min-height: 0;
+  height: calc(100vh - 152px);
 }
 
-/* Sessions card: scrollable, won't push layout */
-.agents-sessions-card {
+.agents-compact-header {
+  margin-bottom: 10px;
+}
+
+.agents-compact-header .eyebrow {
+  margin-bottom: 2px;
+}
+
+.agents-compact-header .page-description {
+  display: none;
+}
+
+.agents-compact-actions {
+  gap: 8px;
+}
+
+.agents-tabs-row {
   display: flex;
-  flex-direction: column;
-  min-height: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.agents-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
   flex: 1;
-  overflow: hidden;
+  overflow-x: auto;
+  padding-bottom: 2px;
 }
 
-.agents-sessions-list {
-  overflow-y: auto;
-  max-height: 260px;
+.agent-tab {
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(15, 23, 42, 0.72);
+  color: #dbe7f5;
+  border-radius: 14px;
+  padding: 10px 14px;
+  min-width: 164px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+  text-align: left;
+  flex-shrink: 0;
 }
 
-.agents-no-sessions {
+.agent-tab.active {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.24), rgba(15, 118, 110, 0.2));
+  box-shadow: inset 0 0 0 1px rgba(125, 211, 252, 0.22);
+}
+
+.agent-tab-name {
+  font-weight: 700;
+  color: #f8fbff;
+}
+
+.agent-tab-meta {
   color: #94a3b8;
-  font-size: 0.88rem;
-  padding: 8px 0;
-  margin: 0;
+  font-size: 0.84rem;
 }
 
-.agents-status-row {
-  margin-top: auto;
-  padding-bottom: 4px;
+.agents-tabs-status {
+  flex-shrink: 0;
 }
 
 .agents-chat-wrap {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  min-height: 0;
+  flex: 1;
 }
 
 .agents-chat {
   flex: 1;
-  height: 100%;
-  margin: 12px 18px 12px 0;
+  min-height: 0;
 }
 
 /* ── Agent Chat ── */
@@ -570,6 +604,7 @@
 .chat-container {
   display: flex;
   flex-direction: column;
+  height: 100%;
   border: 1px solid rgba(148, 163, 184, 0.12);
   background: rgba(15, 23, 42, 0.72);
   border-radius: 18px;
@@ -580,8 +615,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 16px 20px;
+  gap: 10px;
+  padding: 12px 16px;
   border-bottom: 1px solid rgba(148, 163, 184, 0.12);
   background: rgba(9, 14, 24, 0.6);
 }
@@ -600,6 +635,13 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+}
+
+.chat-session-note,
+.chat-model-label {
+  color: #94a3b8;
+  font-size: 0.84rem;
 }
 
 .chat-back-btn {
@@ -646,10 +688,10 @@
 .chat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 20px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .chat-empty {
@@ -661,7 +703,7 @@
   text-align: center;
   gap: 8px;
   color: #94a3b8;
-  padding: 40px 20px;
+  padding: 24px 16px;
 }
 
 .chat-empty-name {
@@ -677,10 +719,10 @@
 }
 
 .chat-bubble {
-  max-width: 80%;
-  border-radius: 16px;
-  padding: 12px 16px;
-  line-height: 1.6;
+  max-width: 82%;
+  border-radius: 15px;
+  padding: 10px 14px;
+  line-height: 1.55;
   word-break: break-word;
 }
 
@@ -739,10 +781,12 @@
 
 .chat-input-bar {
   display: flex;
-  gap: 10px;
-  padding: 14px 20px;
+  gap: 8px;
+  padding: 10px 14px;
   border-top: 1px solid rgba(148, 163, 184, 0.12);
-  background: rgba(9, 14, 24, 0.6);
+  background: rgba(9, 14, 24, 0.88);
+  position: sticky;
+  bottom: 0;
 }
 
 .chat-input {
@@ -750,10 +794,10 @@
   border: 1px solid rgba(148, 163, 184, 0.16);
   background: rgba(15, 23, 42, 0.82);
   color: #e5edf7;
-  border-radius: 14px;
-  padding: 12px 16px;
+  border-radius: 12px;
+  padding: 10px 14px;
   outline: none;
-  font-size: 0.95rem;
+  font-size: 0.94rem;
 }
 
 .chat-input:focus {
@@ -762,14 +806,14 @@
 }
 
 .chat-send {
-  border-radius: 14px;
-  padding: 12px 20px;
+  border-radius: 12px;
+  padding: 10px 16px;
   background: linear-gradient(135deg, #2563eb, #0f766e);
   color: #fff;
   border: 0;
   cursor: pointer;
   font-weight: 600;
-  font-size: 0.92rem;
+  font-size: 0.9rem;
   transition: opacity 140ms;
 }
 

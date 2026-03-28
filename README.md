@@ -44,10 +44,11 @@ That means future Settings, Agents, and model management screens should act as a
 ### Agents
 
 - Lists real OpenClaw agents
-- Lists active OpenClaw sessions
 - Supports live chat to OpenClaw agents through the gateway using a backend proxy
 - Keeps gateway auth on the server side instead of exposing the real token to the browser
-- Current UI is centered on agent selection, live session visibility, and an always-available chat panel
+- Current UI is chat-first: agent tabs across the top, an always-visible chat pane, and reduced session-monitoring chrome
+- Maintains local per-agent tab history while switching between agents during the session
+- Still reads active OpenClaw session data for runtime context, but no longer lets the live session list dominate the page layout
 
 ### System
 
@@ -188,7 +189,8 @@ Default local ports:
 - Agent management UI as a wrapper over native OpenClaw agent configuration
 - Model and provider UI for defaults and assignment
 - Settings and secrets UI backed by OpenClaw-native config and secrets
-- Better live session browsing and chat history tools
+- Persistent chat history across page refreshes and reloads
+- Better session browsing and history tools when needed, without letting monitoring UI crowd the main chat workspace
 - Workflow and pipeline orchestration UI
 
 ## Product Constraint Worth Keeping

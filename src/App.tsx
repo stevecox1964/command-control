@@ -792,14 +792,17 @@ function AgentsPage() {
   const [gatewayToken, setGatewayToken] = useState<string>('')
 
   // Chat state
-  const [chatHistory, setChatHistory] = useState<OcChatMessage[]>([])
+  const [chatHistories, setChatHistories] = useState<Record<string, OcChatMessage[]>>({})
   const [chatInput, setChatInput] = useState('')
-  const [streaming, setStreaming] = useState(false)
-  const [streamingText, setStreamingText] = useState('')
+  const [streamingAgentId, setStreamingAgentId] = useState<string | null>(null)
+  const [streamingTexts, setStreamingTexts] = useState<Record<string, string>>({})
   const chatEndRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   const selectedAgent = agents.find((a) => a.id === selectedAgentId) ?? agents[0] ?? null
+  const selectedChatHistory = selectedAgent ? (chatHistories[selectedAgent.id] ?? []) : []
+  const selectedStreamingText = selectedAgent ? (streamingTexts[selectedAgent.id] ?? '') : ''
+  const streaming = selectedAgent ? streamingAgentId === selectedAgent.id : false
 
   async function loadAgents() {
     setError(null)
@@ -823,42 +826,52 @@ function AgentsPage() {
   }, [])
 
   function handleClearChat() {
-    setChatHistory([])
-    setStreamingText('')
+    if (!selectedAgent) return
+    setChatHistories((prev) => ({ ...prev, [selectedAgent.id]: [] }))
+    setStreamingTexts((prev) => ({ ...prev, [selectedAgent.id]: '' }))
+    if (streamingAgentId === selectedAgent.id && abortRef.current) {
+      abortRef.current.abort()
+      abortRef.current = null
+      setStreamingAgentId(null)
+    }
     setNotice('Chat history cleared')
   }
 
   async function handleSendMessage(event: React.FormEvent) {
     event.preventDefault()
     if (!selectedAgent || !chatInput.trim() || streaming || !gatewayToken) return
+    const agentId = selectedAgent.id
     const userMsg = chatInput.trim()
     setChatInput('')
-    setStreaming(true)
-    setStreamingText('')
+    setStreamingAgentId(agentId)
+    setStreamingTexts((prev) => ({ ...prev, [agentId]: '' }))
 
     const newUserMessage: OcChatMessage = { role: 'user', content: userMsg }
-    const updatedHistory = [...chatHistory, newUserMessage]
-    setChatHistory(updatedHistory)
+    const updatedHistory = [...selectedChatHistory, newUserMessage]
+    setChatHistories((prev) => ({ ...prev, [agentId]: updatedHistory }))
 
     const controller = new AbortController()
     abortRef.current = controller
 
     try {
       await sendOcMessage(
-        selectedAgent.id,
+        agentId,
         updatedHistory,
         gatewayToken,
         {
-          onToken: (token) => setStreamingText((prev) => prev + token),
+          onToken: (token) => setStreamingTexts((prev) => ({ ...prev, [agentId]: (prev[agentId] ?? '') + token })),
           onDone: (fullContent) => {
-            setChatHistory((prev) => [...prev, { role: 'assistant', content: fullContent }])
-            setStreamingText('')
-            setStreaming(false)
+            setChatHistories((prev) => ({
+              ...prev,
+              [agentId]: [...(prev[agentId] ?? []), { role: 'assistant', content: fullContent }],
+            }))
+            setStreamingTexts((prev) => ({ ...prev, [agentId]: '' }))
+            setStreamingAgentId((current) => (current === agentId ? null : current))
           },
           onError: (errMsg) => {
             setError(errMsg)
-            setStreaming(false)
-            setStreamingText('')
+            setStreamingTexts((prev) => ({ ...prev, [agentId]: '' }))
+            setStreamingAgentId((current) => (current === agentId ? null : current))
           },
         },
         controller.signal,
@@ -867,182 +880,128 @@ function AgentsPage() {
       if (!controller.signal.aborted) {
         setError(err instanceof Error ? err.message : 'Failed to send message')
       }
-      setStreaming(false)
-      setStreamingText('')
+      setStreamingTexts((prev) => ({ ...prev, [agentId]: '' }))
+      setStreamingAgentId((current) => (current === agentId ? null : current))
     }
   }
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [chatHistory, streamingText])
-
-  useEffect(() => {
-    // Reset chat when switching agents
-    setChatHistory([])
-    setStreamingText('')
-    if (abortRef.current) {
-      abortRef.current.abort()
-      abortRef.current = null
-    }
-  }, [selectedAgentId])
+  }, [selectedChatHistory, selectedStreamingText])
 
   return (
     <section className="page agents-page">
-      <div className="page-header">
+      <div className="page-header agents-compact-header">
         <div>
           <p className="eyebrow">Runtime</p>
           <h2>Agents</h2>
-          <p className="page-description">
-            OpenClaw agents — chat with any agent through the gateway.
-          </p>
         </div>
-        <div className="page-header-actions">
+        <div className="page-header-actions agents-compact-actions">
           <button className="secondary" onClick={() => void loadAgents()}>Refresh</button>
-          <button className="secondary" onClick={handleClearChat} disabled={chatHistory.length === 0}>Clear Chat</button>
+          <button className="secondary" onClick={handleClearChat} disabled={selectedChatHistory.length === 0 && !selectedStreamingText}>Clear Chat</button>
         </div>
       </div>
 
       {error ? <div className="notice error">{error}</div> : null}
       {notice ? <div className="notice success">{notice}</div> : null}
 
-      <Group orientation="horizontal" className="memory-panels agents-panels">
-        {/* Left: agent selector + session list */}
-        <Panel defaultSize="28%" minSize="20%">
-          <div className="memory-index agents-sidebar">
-            {/* Agent list */}
-            <section className="group-card">
-              <div className="group-header">
-                <h4>Agents</h4>
-                <span>{agents.length}</span>
-              </div>
-              <div className="entry-list">
-                {agents.map((agent) => (
-                  <button
-                    key={agent.id}
-                    className={`entry-item ${agent.id === selectedAgent?.id ? 'selected' : ''}`}
-                    onClick={() => setSelectedAgentId(agent.id)}
-                  >
-                    <div>
-                      <strong>{agent.identityEmoji ?? '🤖'} {agent.identityName ?? agent.id}{agent.isDefault ? ' (default)' : ''}</strong>
-                      <p>{agent.model ?? 'no model set'}</p>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </section>
+      <section className="agents-layout">
+        <div className="agents-tabs-row">
+          <div className="agents-tabs" role="tablist" aria-label="Agent tabs">
+            {agents.map((agent) => (
+              <button
+                key={agent.id}
+                role="tab"
+                aria-selected={agent.id === selectedAgent?.id}
+                className={`agent-tab ${agent.id === selectedAgent?.id ? 'active' : ''}`}
+                onClick={() => setSelectedAgentId(agent.id)}
+              >
+                <span className="agent-tab-name">
+                  {agent.identityEmoji ?? '🤖'} {agent.identityName ?? agent.id}
+                </span>
+                <span className="agent-tab-meta">{agent.model ?? 'default'}</span>
+              </button>
+            ))}
+          </div>
 
-            {/* Session list — scrollable, won't grow the layout */}
-            <section className="group-card agents-sessions-card">
-              <div className="group-header">
-                <h4>Live Sessions</h4>
-                <span>{sessions.length}</span>
+          <div className="agents-tabs-status">
+            <span className={`status-pill ${gatewayToken ? 'online' : ''}`}>
+              {gatewayToken ? 'Gateway Connected' : 'No Gateway Token'}
+            </span>
+          </div>
+        </div>
+
+        <div className="agents-chat-wrap">
+          {selectedAgent && gatewayToken ? (
+            <div className="chat-container agents-chat">
+              <div className="chat-header">
+                <div className="chat-header-left">
+                  <div>
+                    <p className="eyebrow">Chat</p>
+                    <h3>{selectedAgent.identityName ?? selectedAgent.id} {selectedAgent.identityEmoji ?? ''}</h3>
+                  </div>
+                </div>
+                <div className="chat-header-actions">
+                  <span className="chat-model-label">{selectedAgent.model ?? 'default'}</span>
+                  <span className="chat-session-note">{sessions.length} live session{sessions.length !== 1 ? 's' : ''}</span>
+                </div>
               </div>
-              <div className="entry-list agents-sessions-list">
-                {sessions.length === 0 && (
-                  <p className="agents-no-sessions">No active sessions</p>
+
+              <div className="chat-messages">
+                {selectedChatHistory.length === 0 && !streaming && (
+                  <div className="chat-empty">
+                    <p className="chat-empty-name">{selectedAgent.identityEmoji ?? '🤖'} {selectedAgent.identityName ?? selectedAgent.id}</p>
+                    <p>{selectedAgent.model}</p>
+                    <p className="chat-empty-hint">Send a message to start chatting through OpenClaw.</p>
+                  </div>
                 )}
-                {sessions.map((session: any) => (
-                  <button
-                    key={session.key}
-                    className="entry-item"
-                  >
-                    <div>
-                      <strong>{session.agentId}</strong>
-                      <p>{session.model} · {session.kind}</p>
+                {selectedChatHistory.map((msg, i) => (
+                  <div key={i} className={`chat-bubble ${msg.role}`}>
+                    <div className="chat-bubble-role">
+                      {msg.role === 'user' ? 'You' : (selectedAgent.identityName ?? selectedAgent.id)}
                     </div>
-                    <div className="entry-meta">
-                      <span>{Math.round((session.ageMs ?? 0) / 60000)}m</span>
-                      <span>{session.totalTokens ?? 0} tok</span>
-                    </div>
-                  </button>
+                    <div className="chat-bubble-content">{msg.content}</div>
+                  </div>
                 ))}
+                {streaming && selectedStreamingText && (
+                  <div className="chat-bubble assistant streaming">
+                    <div className="chat-bubble-role">{selectedAgent.identityName ?? selectedAgent.id}</div>
+                    <div className="chat-bubble-content">{selectedStreamingText}<span className="chat-cursor" /></div>
+                  </div>
+                )}
+                {streaming && !selectedStreamingText && (
+                  <div className="chat-bubble assistant streaming">
+                    <div className="chat-bubble-role">{selectedAgent.identityName ?? selectedAgent.id}</div>
+                    <div className="chat-bubble-content"><span className="chat-typing">Thinking...</span></div>
+                  </div>
+                )}
+                <div ref={chatEndRef} />
               </div>
-            </section>
 
-            {/* Gateway status */}
-            <div className="agents-status-row">
-              <span className={`status-pill ${gatewayToken ? 'online' : ''}`}>
-                {gatewayToken ? 'Gateway Connected' : 'No Gateway Token'}
-              </span>
+              <form className="chat-input-bar" onSubmit={handleSendMessage}>
+                <input
+                  className="chat-input"
+                  placeholder={`Message ${selectedAgent.identityName ?? selectedAgent.id}...`}
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  disabled={streaming}
+                  autoFocus
+                />
+                <button className="primary chat-send" type="submit" disabled={streaming || !chatInput.trim()}>
+                  {streaming ? '…' : 'Send'}
+                </button>
+              </form>
             </div>
-          </div>
-        </Panel>
-
-        <Separator className="resize-handle" />
-
-        {/* Right: always-on chat */}
-        <Panel defaultSize="72%" minSize="50%">
-          <div className="agents-chat-wrap">
-            {selectedAgent && gatewayToken ? (
-              <div className="chat-container agents-chat">
-                <div className="chat-header">
-                  <div className="chat-header-left">
-                    <div>
-                      <p className="eyebrow">Chat</p>
-                      <h3>{selectedAgent.identityName ?? selectedAgent.id} {selectedAgent.identityEmoji ?? ''}</h3>
-                    </div>
-                  </div>
-                  <div className="chat-header-actions">
-                    <span className="chat-model-label">{selectedAgent.model ?? 'default'}</span>
-                  </div>
-                </div>
-
-                <div className="chat-messages">
-                  {chatHistory.length === 0 && !streaming && (
-                    <div className="chat-empty">
-                      <p className="chat-empty-name">{selectedAgent.identityEmoji ?? '🤖'} {selectedAgent.identityName ?? selectedAgent.id}</p>
-                      <p>{selectedAgent.model}</p>
-                      <p className="chat-empty-hint">Send a message to start chatting through OpenClaw.</p>
-                    </div>
-                  )}
-                  {chatHistory.map((msg, i) => (
-                    <div key={i} className={`chat-bubble ${msg.role}`}>
-                      <div className="chat-bubble-role">
-                        {msg.role === 'user' ? 'You' : (selectedAgent.identityName ?? selectedAgent.id)}
-                      </div>
-                      <div className="chat-bubble-content">{msg.content}</div>
-                    </div>
-                  ))}
-                  {streaming && streamingText && (
-                    <div className="chat-bubble assistant streaming">
-                      <div className="chat-bubble-role">{selectedAgent.identityName ?? selectedAgent.id}</div>
-                      <div className="chat-bubble-content">{streamingText}<span className="chat-cursor" /></div>
-                    </div>
-                  )}
-                  {streaming && !streamingText && (
-                    <div className="chat-bubble assistant streaming">
-                      <div className="chat-bubble-role">{selectedAgent.identityName ?? selectedAgent.id}</div>
-                      <div className="chat-bubble-content"><span className="chat-typing">Thinking...</span></div>
-                    </div>
-                  )}
-                  <div ref={chatEndRef} />
-                </div>
-
-                <form className="chat-input-bar" onSubmit={handleSendMessage}>
-                  <input
-                    className="chat-input"
-                    placeholder={`Message ${selectedAgent.identityName ?? selectedAgent.id}...`}
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    disabled={streaming}
-                    autoFocus
-                  />
-                  <button className="primary chat-send" type="submit" disabled={streaming || !chatInput.trim()}>
-                    {streaming ? '…' : 'Send'}
-                  </button>
-                </form>
+          ) : (
+            <div className="chat-container agents-chat">
+              <div className="chat-empty" style={{ flex: 1, justifyContent: 'center' }}>
+                <p className="chat-empty-name">No agent selected</p>
+                <p className="chat-empty-hint">{!gatewayToken ? 'Gateway token not loaded.' : 'Select an agent tab to start chatting.'}</p>
               </div>
-            ) : (
-              <div className="chat-container agents-chat">
-                <div className="chat-empty" style={{ flex: 1, justifyContent: 'center' }}>
-                  <p className="chat-empty-name">No agent selected</p>
-                  <p className="chat-empty-hint">{!gatewayToken ? 'Gateway token not loaded.' : 'Select an agent on the left to start chatting.'}</p>
-                </div>
-              </div>
-            )}
-          </div>
-        </Panel>
-      </Group>
+            </div>
+          )}
+        </div>
+      </section>
     </section>
   )
 }
