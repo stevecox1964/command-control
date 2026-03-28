@@ -4,7 +4,7 @@ Command & Control (CC) is a dashboard and control plane for OpenClaw.
 
 The important framing:
 
-- **CC is the UI/control surface**
+- **CC is the UI and operator control surface**
 - **OpenClaw is the runtime, agent, session, config, and auth engine**
 
 CC should wrap and expose native OpenClaw capabilities instead of becoming a second parallel agent platform.
@@ -16,12 +16,12 @@ Command & Control is moving toward a clean split:
 - **OpenClaw owns** agents, sessions, models, secrets, runtime state, gateway auth, and messaging
 - **CC owns** operator UX, dashboards, browsing, task controls, memory views, and future workflow orchestration
 
-That means future Settings, Agents, and model management screens should act as a **friendly UI over native OpenClaw systems** such as:
+That means future Settings, Agents, and model management screens should act as a friendly UI over native OpenClaw systems such as:
 
 - `openclaw agents`
 - `openclaw models`
 - `openclaw secrets`
-- session history / session messaging
+- session history and session messaging
 - gateway-backed chat and runtime status
 
 ## What Exists Now
@@ -31,6 +31,7 @@ That means future Settings, Agents, and model management screens should act as a
 - Ingests markdown files from `../memory/` into SQLite
 - Skips unchanged files using content hashes
 - Lets you browse indexed daily notes and long-term memory docs
+- Exposes ingest, list, and detail APIs through the FastAPI backend
 
 ### Tasks
 
@@ -38,22 +39,24 @@ That means future Settings, Agents, and model management screens should act as a
 - Run-now execution with output capture
 - Recurring scheduling support
 - Execution history per task
+- Supports manual, shell, python, and simple web fetch task types
 
 ### Agents
 
 - Lists real OpenClaw agents
 - Lists active OpenClaw sessions
 - Supports live chat to OpenClaw agents through the gateway using a backend proxy
-- Keeps gateway auth server-side
+- Keeps gateway auth on the server side instead of exposing the real token to the browser
+- Current UI is centered on agent selection, live session visibility, and an always-available chat panel
 
 ### System
 
-- Proxies OpenClaw health/status/session/log information into the UI
+- Proxies OpenClaw health, status, session, gateway, and log information into the UI
 - Provides a basic operational dashboard for runtime visibility
 
 ### Workflows and Settings
 
-- Present as UI shells/stubs today
+- Present as UI shells and placeholders today
 - Intended to become:
   - **Workflows**: orchestration across tasks, agents, and triggers
   - **Settings**: UI wrappers over OpenClaw-native config and secrets, not a separate credential store
@@ -67,16 +70,18 @@ That means future Settings, Agents, and model management screens should act as a
 - Vite
 - React Router
 - Zustand
+- react-resizable-panels
 
 ### Backend
 
 - FastAPI
-- SQLite for CC-local app data (memory/task indexing and UI-side state)
-- OpenClaw CLI and gateway bridge endpoints
+- SQLite for CC-local app data such as memory indexing, tasks, and UI-side state
+- OpenClaw CLI bridge endpoints
+- OpenClaw gateway chat proxy
 
 ## Architecture Notes
 
-CC uses two different data/control paths depending on the feature:
+CC currently uses two different data and control paths depending on the feature:
 
 1. **CC-local app data**
    - memory index
@@ -90,9 +95,11 @@ CC uses two different data/control paths depending on the feature:
    - runtime status
    - logs
    - gateway chat
-   - future model/settings/secrets management
+   - future model, settings, and secrets management
 
 This split is intentional.
+
+There are still some older backend paths in the repository from an earlier phase of development. The intended direction going forward is to keep converging the product around OpenClaw-native agents, sessions, and gateway messaging rather than building a parallel runtime abstraction inside CC.
 
 ## Repository Layout
 
@@ -158,6 +165,7 @@ Default local ports:
 - `GET /api/memory/{id}`
 - `POST /api/memory/ingest`
 - `GET /api/tasks`
+- `GET /api/tasks/{id}`
 - `POST /api/tasks`
 - `PUT /api/tasks/{id}`
 - `DELETE /api/tasks/{id}`
@@ -170,6 +178,7 @@ Default local ports:
 - `GET /api/oc/status`
 - `GET /api/oc/sessions`
 - `GET /api/oc/logs`
+- `GET /api/oc/gateway`
 - `GET /api/oc/agents`
 - `GET /api/oc/gateway-token`
 - `POST /api/oc/chat`
@@ -177,10 +186,10 @@ Default local ports:
 ## Near-Term Roadmap
 
 - Agent management UI as a wrapper over native OpenClaw agent configuration
-- Model/provider UI for defaults and assignment
-- Settings/secrets UI backed by OpenClaw-native config/secrets
+- Model and provider UI for defaults and assignment
+- Settings and secrets UI backed by OpenClaw-native config and secrets
 - Better live session browsing and chat history tools
-- Workflow/pipeline orchestration UI
+- Workflow and pipeline orchestration UI
 
 ## Product Constraint Worth Keeping
 
