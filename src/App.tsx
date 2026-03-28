@@ -797,6 +797,7 @@ function AgentsPage() {
   const [streamingAgentId, setStreamingAgentId] = useState<string | null>(null)
   const [streamingTexts, setStreamingTexts] = useState<Record<string, string>>({})
   const chatEndRef = useRef<HTMLDivElement>(null)
+  const chatInputRef = useRef<HTMLInputElement>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   const selectedAgent = agents.find((a) => a.id === selectedAgentId) ?? agents[0] ?? null
@@ -889,6 +890,13 @@ function AgentsPage() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [selectedChatHistory, selectedStreamingText])
 
+  // Keep chat input focused whenever streaming stops or agent switches
+  useEffect(() => {
+    if (!streaming) {
+      chatInputRef.current?.focus()
+    }
+  }, [streaming, selectedAgentId])
+
   return (
     <section className="page agents-page">
       <div className="page-header agents-compact-header">
@@ -980,6 +988,7 @@ function AgentsPage() {
 
               <form className="chat-input-bar" onSubmit={handleSendMessage}>
                 <input
+                  ref={chatInputRef}
                   className="chat-input"
                   placeholder={`Message ${selectedAgent.identityName ?? selectedAgent.id}...`}
                   value={chatInput}
