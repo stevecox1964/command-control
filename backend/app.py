@@ -1078,6 +1078,49 @@ def oc_logs(limit: int = 80) -> OpenClawLogPayload:
     return OpenClawLogPayload(lines=get_openclaw_logs(limit=limit))
 
 
+@app.get('/api/oc/session-history')
+def oc_session_history(sessionKey: str, limit: int = 40) -> dict:
+    """Proxy session history from the OpenClaw gateway, filtering to user+assistant text only.
+    Fetches a large raw batch (tool calls dominate) then returns the last `limit` chat messages.
+    """
+    token = _get_gateway_token()
+    url = f'{GATEWAY_URL}/sessions/{sessionKey}/history'
+    # Fetch a large batch since most items are tool calls
+    try:
+        resp = httpx.get(url, headers={'Authorization': f'Bearer {token}'}, params={'limit': 1000}, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f'Failed to fetch session history: {e}')
+
+    def extract_text(content) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for block in content:
+                if isinstance(block, dict) and block.get('type') == 'text':
+                    parts.append(block.get('text', ''))
+                elif isinstance(block, str):
+                    parts.append(block)
+            return ''.join(parts)
+        return ''
+
+    # Filter to user/assistant messages with non-empty text content
+    items = data.get('items', [])
+    messages = []
+    for item in items:
+        role = item.get('role')
+        if role not in ('user', 'assistant'):
+            continue
+        text = extract_text(item.get('content', ''))
+        if text.strip():
+            messages.append({'role': role, 'content': text})
+
+    # Return only the last N chat messages
+    return {'sessionKey': sessionKey, 'messages': messages[-limit:]}
+
+
 @app.get('/api/agent-profiles', response_model=list[AgentProfileRecord])
 def list_agent_profiles() -> list[AgentProfileRecord]:
     with connect_db() as conn:

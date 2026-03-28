@@ -4,7 +4,7 @@ import { Group, Panel, Separator } from 'react-resizable-panels'
 import { fetchMemoryDocument, fetchMemoryList, ingestMemory } from './lib/api'
 import { createTask, deleteTask, fetchTaskRuns, fetchTasks, runTask, updateTask } from './lib/tasks'
 import { fetchOcHealth, fetchOcLogs, fetchOcSessions, fetchOcStatus } from './lib/oc'
-import { type OcAgent, type ChatMessage as OcChatMessage, fetchOcAgents, sendMessage as sendOcMessage } from './lib/ocChat'
+import { type OcAgent, type ChatMessage as OcChatMessage, fetchOcAgents, sendMessage as sendOcMessage, fetchSessionHistory } from './lib/ocChat'
 import './App.css'
 
 type StubCard = {
@@ -896,6 +896,27 @@ function AgentsPage() {
       chatInputRef.current?.focus()
     }
   }, [streaming, selectedAgentId])
+
+  // Load history from OpenClaw when agent is selected (if not already loaded)
+  useEffect(() => {
+    if (!selectedAgentId || !sessions.length) return
+    // Only fetch if we haven't loaded history for this agent yet
+    if (chatHistories[selectedAgentId] !== undefined) return
+    // Find the live session key for this agent
+    const agentSession = sessions.find((s: any) => s.agentId === selectedAgentId)
+    if (!agentSession?.key) return
+    fetchSessionHistory(agentSession.key, 60)
+      .then((messages) => {
+        setChatHistories((prev) => ({
+          ...prev,
+          [selectedAgentId]: messages,
+        }))
+      })
+      .catch(() => {
+        // Silently fall back to empty — history just won't show
+        setChatHistories((prev) => ({ ...prev, [selectedAgentId]: [] }))
+      })
+  }, [selectedAgentId, sessions])
 
   return (
     <section className="page agents-page">

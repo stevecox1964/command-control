@@ -102,6 +102,18 @@ export async function sendMessage(
 }
 
 /**
+ * Fetch recent chat history for an OpenClaw session from the gateway (via backend proxy).
+ * Returns only user+assistant messages, ready to use as chatHistory state.
+ */
+export async function fetchSessionHistory(sessionKey: string, limit = 50): Promise<ChatMessage[]> {
+  const params = new URLSearchParams({ sessionKey, limit: String(limit) })
+  const response = await fetch(`${API_BASE}/api/oc/session-history?${params}`)
+  if (!response.ok) throw new Error('Failed to fetch session history')
+  const data = await response.json()
+  return data.messages ?? []
+}
+
+/**
  * Fetch the list of OpenClaw agents from the backend.
  */
 export interface OcAgent {
