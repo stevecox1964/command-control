@@ -511,14 +511,65 @@
   font-weight: 700;
 }
 
+/* ── Agents Page ── */
+
+.agents-page .memory-panels {
+  /* Fill the remaining viewport below the page header + notices */
+  min-height: 0;
+  height: calc(100vh - 200px);
+}
+
+.agents-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Sessions card: scrollable, won't push layout */
+.agents-sessions-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.agents-sessions-list {
+  overflow-y: auto;
+  max-height: 260px;
+}
+
+.agents-no-sessions {
+  color: #94a3b8;
+  font-size: 0.88rem;
+  padding: 8px 0;
+  margin: 0;
+}
+
+.agents-status-row {
+  margin-top: auto;
+  padding-bottom: 4px;
+}
+
+.agents-chat-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.agents-chat {
+  flex: 1;
+  height: 100%;
+  margin: 12px 18px 12px 0;
+}
+
 /* ── Agent Chat ── */
 
 .chat-container {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 310px);
-  max-height: calc(100vh - 310px);
-  margin: 18px;
   border: 1px solid rgba(148, 163, 184, 0.12);
   background: rgba(15, 23, 42, 0.72);
   border-radius: 18px;
