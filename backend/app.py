@@ -15,12 +15,13 @@ from typing import Literal
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 import anthropic
+import httpx
 import openai
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -975,6 +976,76 @@ def list_task_runs(task_id: int) -> list[TaskRunRecord]:
             (task_id,),
         ).fetchall()
     return [row_to_task_run(row) for row in rows]
+
+
+@app.get('/api/oc/agents')
+def oc_agents() -> list[dict]:
+    result = run_openclaw_command(['agents', 'list', '--json'])
+    if not result.ok:
+        raise HTTPException(status_code=500, detail=result.stderr or 'openclaw agents list failed')
+    return json.loads(result.stdout)
+
+
+@app.get('/api/oc/gateway-token')
+def oc_gateway_token() -> dict[str, str]:
+    """Returns whether gateway auth is available (token stays server-side)."""
+    token = _get_gateway_token()
+    return {'token': 'available' if token else 'missing'}
+
+
+def _get_gateway_token() -> str:
+    config_path = Path.home() / '.openclaw' / 'openclaw.json'
+    try:
+        with open(config_path) as f:
+            config = json.load(f)
+        token = config.get('gateway', {}).get('auth', {}).get('token', '')
+        if not token:
+            raise HTTPException(status_code=500, detail='No gateway token found in config')
+        return token
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        raise HTTPException(status_code=500, detail=f'Could not read gateway config: {e}')
+
+
+GATEWAY_URL = 'http://127.0.0.1:18789'
+
+
+@app.post('/api/oc/chat')
+async def oc_chat_proxy(request: Request):
+    """Proxy chat completions to the OpenClaw gateway, streaming SSE back to the browser."""
+    body = await request.json()
+    agent_id = body.pop('agentId', 'main')
+    token = _get_gateway_token()
+
+    # Build the OpenAI-compatible request
+    payload = {
+        'model': f'openclaw:{agent_id}',
+        'stream': True,
+        'messages': body.get('messages', []),
+    }
+    if body.get('user'):
+        payload['user'] = body['user']
+
+    async def stream_generator():
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
+            async with client.stream(
+                'POST',
+                f'{GATEWAY_URL}/v1/chat/completions',
+                json=payload,
+                headers={
+                    'Authorization': f'Bearer {token}',
+                    'Content-Type': 'application/json',
+                    'x-openclaw-agent-id': agent_id,
+                },
+            ) as response:
+                if response.status_code != 200:
+                    error_body = await response.aread()
+                    yield f'data: {{"error": {json.dumps(error_body.decode())}}}\n\n'
+                    return
+                async for line in response.aiter_lines():
+                    if line:
+                        yield f'{line}\n\n'
+
+    return StreamingResponse(stream_generator(), media_type='text/event-stream')
 
 
 @app.get('/api/oc/health')

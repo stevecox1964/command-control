@@ -1,137 +1,187 @@
 # Command & Control
 
-Operational dashboard for managing agents, tasks, memory, and system health. Built on React + FastAPI with a local SQLite backend.
+Command & Control (CC) is a dashboard and control plane for OpenClaw.
 
-## Stack
+The important framing:
 
-| Layer    | Tech                                                        |
-| -------- | ----------------------------------------------------------- |
-| Frontend | React 19, TypeScript, Vite, react-router-dom, zustand       |
-| Backend  | Python, FastAPI, SQLite (WAL mode)                          |
-| LLMs     | Anthropic (Claude), OpenAI (GPT) -- switchable per agent    |
-| Runtime  | Hyper-V Ubuntu VM, Windows host                             |
+- **CC is the UI/control surface**
+- **OpenClaw is the runtime, agent, session, config, and auth engine**
 
-## Features
+CC should wrap and expose native OpenClaw capabilities instead of becoming a second parallel agent platform.
 
-### Agent Chat (multi-vendor)
-Chat with any agent profile in real time. Responses stream token-by-token via SSE.
+## Product Direction
 
-- **Anthropic**: Claude Sonnet 4.6, Opus 4.6, Haiku 4.5
-- **OpenAI**: GPT-4o, GPT-4.1, GPT-4.1 Mini, o4-mini
-- Switch models per-agent from the chat header dropdown
-- Conversation history persists in SQLite
+Command & Control is moving toward a clean split:
 
-### Task Engine
-- CRUD for tasks (manual, shell, python, web_fetch types)
-- Run-now execution with output capture
-- Background scheduler polls every 10s for due recurring tasks
-- Execution history per task
+- **OpenClaw owns** agents, sessions, models, secrets, runtime state, gateway auth, and messaging
+- **CC owns** operator UX, dashboards, browsing, task controls, memory views, and future workflow orchestration
 
-### Agent Profiles
-- Define specialist agents with role, purpose, capability, preferred model
-- Promote/demote between planned and live status
-- Seeded with: Dufus (main assistant), Research Scout, Trend Distiller, Social Packager
+That means future Settings, Agents, and model management screens should act as a **friendly UI over native OpenClaw systems** such as:
+
+- `openclaw agents`
+- `openclaw models`
+- `openclaw secrets`
+- session history / session messaging
+- gateway-backed chat and runtime status
+
+## What Exists Now
 
 ### Memory
+
 - Ingests markdown files from `../memory/` into SQLite
-- Content-hashed to skip unchanged files on re-ingest
-- Daily journals and long-term memory documents
+- Skips unchanged files using content hashes
+- Lets you browse indexed daily notes and long-term memory docs
 
-### System / OpenClaw Bridge
-- Proxies `openclaw` CLI for health, sessions, gateway status, and logs
-- Real-time system health dashboard
+### Tasks
 
-### Additional Modules (stubs)
-Content, Approvals, Workflows, Docs, Settings -- navigation and layout ready, wired for future data.
+- CRUD for local tasks
+- Run-now execution with output capture
+- Recurring scheduling support
+- Execution history per task
 
-## Setup
+### Agents
 
-### Prerequisites
-- Node.js 20+
-- Python 3.11+
-- Hyper-V Ubuntu VM (or any Linux environment)
+- Lists real OpenClaw agents
+- Lists active OpenClaw sessions
+- Supports live chat to OpenClaw agents through the gateway using a backend proxy
+- Keeps gateway auth server-side
 
-### Install
+### System
 
-```bash
-# Frontend
-npm install
+- Proxies OpenClaw health/status/session/log information into the UI
+- Provides a basic operational dashboard for runtime visibility
 
-# Backend
-cd backend
-pip install -r requirements.txt
-```
+### Workflows and Settings
 
-### Environment Variables
+- Present as UI shells/stubs today
+- Intended to become:
+  - **Workflows**: orchestration across tasks, agents, and triggers
+  - **Settings**: UI wrappers over OpenClaw-native config and secrets, not a separate credential store
 
-Create a `.env` or export these in your shell:
+## Current Stack
 
-```bash
-# Required for Anthropic models (Claude)
-export ANTHROPIC_API_KEY="sk-ant-..."
+### Frontend
 
-# Required only if using OpenAI models
-export OPENAI_API_KEY="sk-..."
-```
+- React 19
+- TypeScript
+- Vite
+- React Router
+- Zustand
 
-### Run
+### Backend
 
-```bash
-# Terminal 1 -- backend
-cd backend
-uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+- FastAPI
+- SQLite for CC-local app data (memory/task indexing and UI-side state)
+- OpenClaw CLI and gateway bridge endpoints
 
-# Terminal 2 -- frontend
-npm run dev
-```
+## Architecture Notes
 
-Frontend serves on `http://localhost:5173`, backend API on `http://localhost:8000`.
+CC uses two different data/control paths depending on the feature:
 
-## Project Structure
+1. **CC-local app data**
+   - memory index
+   - tasks
+   - task runs
+   - other UI-owned metadata
 
-```
+2. **OpenClaw-native runtime data**
+   - agents
+   - sessions
+   - runtime status
+   - logs
+   - gateway chat
+   - future model/settings/secrets management
+
+This split is intentional.
+
+## Repository Layout
+
+```text
 command-control/
   backend/
-    app.py              # FastAPI server -- all endpoints, DB, scheduler, LLM streaming
+    app.py              # FastAPI server, task/memory DB, OpenClaw bridge, gateway chat proxy
     requirements.txt
-    memory.db           # SQLite database (auto-created on startup)
   src/
-    App.tsx             # All pages -- Shell, Tasks, Agents/Chat, Memory, System, stubs
-    App.css             # Full stylesheet
+    App.tsx             # Main app shell and page implementations
+    App.css             # App styling
     lib/
       api.ts            # Memory API client
       tasks.ts          # Task CRUD + run client
-      agentProfiles.ts  # Agent profile CRUD + model list client
-      chat.ts           # Chat streaming client (SSE via ReadableStream)
-      oc.ts             # OpenClaw bridge client
+      oc.ts             # OpenClaw status/session/log bridge client
+      ocChat.ts         # OpenClaw agent list + gateway chat client
   public/
   index.html
   vite.config.ts
 ```
 
-## API Endpoints
+## Setup
 
-| Method | Path                                    | Description                    |
-| ------ | --------------------------------------- | ------------------------------ |
-| GET    | `/health`                               | Health check                   |
-| GET    | `/api/models`                           | List available LLM models      |
-| GET    | `/api/tasks`                            | List all tasks                 |
-| POST   | `/api/tasks`                            | Create task                    |
-| PUT    | `/api/tasks/{id}`                       | Update task                    |
-| DELETE | `/api/tasks/{id}`                       | Delete task                    |
-| POST   | `/api/tasks/{id}/run`                   | Execute task now               |
-| GET    | `/api/tasks/{id}/runs`                  | Task execution history         |
-| GET    | `/api/agent-profiles`                   | List agent profiles            |
-| POST   | `/api/agent-profiles`                   | Create agent profile           |
-| PUT    | `/api/agent-profiles/{id}`              | Update agent profile           |
-| DELETE | `/api/agent-profiles/{id}`              | Delete agent profile           |
-| GET    | `/api/agent-profiles/{id}/chat`         | Get chat history               |
-| POST   | `/api/agent-profiles/{id}/chat`         | Send message (SSE stream)      |
-| DELETE | `/api/agent-profiles/{id}/chat`         | Clear chat history             |
-| GET    | `/api/memory`                           | List memory documents          |
-| GET    | `/api/memory/{id}`                      | Get memory document            |
-| POST   | `/api/memory/ingest`                    | Re-ingest memory files         |
-| GET    | `/api/oc/health`                        | OpenClaw health                |
-| GET    | `/api/oc/sessions`                      | OpenClaw sessions              |
-| GET    | `/api/oc/status`                        | OpenClaw full status           |
-| GET    | `/api/oc/logs`                          | OpenClaw logs                  |
+### Prerequisites
+
+- Node.js 20+
+- Python 3.11+
+- OpenClaw installed and configured
+- OpenClaw gateway available locally
+
+### Install
+
+```bash
+# frontend
+npm install
+
+# backend
+cd backend
+pip install -r requirements.txt
+```
+
+### Run
+
+```bash
+# terminal 1: backend
+cd backend
+uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+
+# terminal 2: frontend
+npm run dev
+```
+
+Default local ports:
+
+- Frontend: `http://localhost:5173`
+- Backend: `http://localhost:8000`
+
+## Key API Areas
+
+### CC-local data
+
+- `GET /api/memory`
+- `GET /api/memory/{id}`
+- `POST /api/memory/ingest`
+- `GET /api/tasks`
+- `POST /api/tasks`
+- `PUT /api/tasks/{id}`
+- `DELETE /api/tasks/{id}`
+- `POST /api/tasks/{id}/run`
+- `GET /api/tasks/{id}/runs`
+
+### OpenClaw bridge
+
+- `GET /api/oc/health`
+- `GET /api/oc/status`
+- `GET /api/oc/sessions`
+- `GET /api/oc/logs`
+- `GET /api/oc/agents`
+- `GET /api/oc/gateway-token`
+- `POST /api/oc/chat`
+
+## Near-Term Roadmap
+
+- Agent management UI as a wrapper over native OpenClaw agent configuration
+- Model/provider UI for defaults and assignment
+- Settings/secrets UI backed by OpenClaw-native config/secrets
+- Better live session browsing and chat history tools
+- Workflow/pipeline orchestration UI
+
+## Product Constraint Worth Keeping
+
+If CC becomes a packaged product or appliance, the base system should stay **CPU-friendly by default**, with GPU treated as optional acceleration or a worker tier rather than a mandatory always-on requirement.
