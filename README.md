@@ -39,16 +39,20 @@ The reason is simple: setting up Telegram is useful infrastructure, but it is no
 - keep history
 - stay inside one workspace with status, tasks, memory, and future workflows nearby
 
+That direction is now materially more real because **live local chat is working inside CC**, and the memory UI now rides on OpenClaw-native memory rather than a separate parallel system.
+
 Long term, a dedicated mobile app makes more product sense than treating Telegram as the main experience.
 
 ## What Exists Now
 
 ### Memory
 
-- Ingests markdown files from `../memory/` into SQLite
-- Skips unchanged files using content hashes
-- Lets you browse indexed daily notes and long-term memory docs
-- Exposes ingest, list, and detail APIs through the FastAPI backend
+- Uses **OpenClaw's native memory system** instead of a separate CC-owned memory layer
+- Proxies native memory status, search, reindex, file listing, and file reads through the FastAPI backend
+- Supports **multi-agent memory browsing** so you can switch between `main`, `rufus`, and future agents
+- Exposes **hybrid semantic + BM25 search** powered by OpenClaw's embedding/index pipeline
+- Reads actual workspace memory files (`MEMORY.md` and `memory/*.md`) rather than a shadow copy
+- Provides native reindex controls from inside CC
 
 ### Tasks
 
@@ -95,19 +99,21 @@ Long term, a dedicated mobile app makes more product sense than treating Telegra
 ### Backend
 
 - FastAPI
-- SQLite for CC-local app data such as memory indexing, tasks, and UI-side state
+- SQLite for CC-local app data such as tasks and UI-side state
+- Legacy SQLite memory-ingest code still exists in the backend but is no longer the primary memory path
 - OpenClaw CLI bridge endpoints
 - OpenClaw gateway chat proxy
+- OpenClaw native memory proxy endpoints
 
 ## Architecture Notes
 
 CC currently uses two different data and control paths depending on the feature:
 
 1. **CC-local app data**
-   - memory index
    - tasks
    - task runs
    - other UI-owned metadata
+   - some legacy memory-ingest code that still remains in the backend but is now deprecated
 
 2. **OpenClaw-native runtime data**
    - agents
@@ -115,27 +121,29 @@ CC currently uses two different data and control paths depending on the feature:
    - runtime status
    - logs
    - gateway chat
+   - native memory status/search/reindex/file access
    - future model, settings, and secrets management
 
-This split is intentional.
+This split is intentional, but the product direction is getting cleaner: features that are fundamentally agent/runtime concerns should keep moving onto OpenClaw-native rails.
 
-There are still some older backend paths in the repository from an earlier phase of development. The intended direction going forward is to keep converging the product around OpenClaw-native agents, sessions, and gateway messaging rather than building a parallel runtime abstraction inside CC.
+There are still some older backend paths in the repository from an earlier phase of development. The intended direction going forward is to keep converging the product around OpenClaw-native agents, sessions, memory, and gateway messaging rather than building a parallel runtime abstraction inside CC.
 
 ## Repository Layout
 
 ```text
 command-control/
   backend/
-    app.py              # FastAPI server, task/memory DB, OpenClaw bridge, gateway chat proxy
+    app.py              # FastAPI server, task DB, legacy memory code, OpenClaw bridge, gateway chat proxy, native memory proxy
     requirements.txt
   src/
     App.tsx             # Main app shell and page implementations
     App.css             # App styling
     lib/
-      api.ts            # Memory API client
+      api.ts            # Older CC memory client (deprecated)
       tasks.ts          # Task CRUD + run client
       oc.ts             # OpenClaw status/session/log bridge client
       ocChat.ts         # OpenClaw agent list + gateway chat client
+      ocMemory.ts       # OpenClaw native memory client
   public/
   index.html
   vite.config.ts
@@ -184,6 +192,7 @@ Default local ports:
 - `GET /api/memory`
 - `GET /api/memory/{id}`
 - `POST /api/memory/ingest`
+- Legacy path retained for now; UI no longer depends on it
 - `GET /api/tasks`
 - `GET /api/tasks/{id}`
 - `POST /api/tasks`
@@ -202,9 +211,15 @@ Default local ports:
 - `GET /api/oc/agents`
 - `GET /api/oc/gateway-token`
 - `POST /api/oc/chat`
+- `GET /api/oc/memory/status`
+- `POST /api/oc/memory/search`
+- `POST /api/oc/memory/reindex`
+- `GET /api/oc/memory/files`
+- `GET /api/oc/memory/file`
 
 ## Near-Term Roadmap
 
+- Remove or quarantine the old parallel CC memory ingest path now that the UI is on OpenClaw-native memory
 - Agent management UI as a wrapper over native OpenClaw agent configuration
 - Model and provider UI for defaults and assignment
 - Settings and secrets UI backed by OpenClaw-native config and secrets

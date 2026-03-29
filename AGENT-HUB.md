@@ -23,6 +23,7 @@ Instead, build a **hub / bus** so multiple agents can coordinate cleanly while k
 - **CC should be the primary place Steve talks to agents**
 - **Telegram should be fallback / remote / notification infrastructure**, not the center of the product
 - Long term, a dedicated mobile app is more product-aligned than forcing Telegram to carry the main UX
+- This is now more than theory: live local chat in CC is working, and native memory visibility is now part of the same surface
 
 ## What the Hub Should Handle
 

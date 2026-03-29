@@ -1035,6 +1035,7 @@ async def oc_chat_proxy(request: Request):
                     'Authorization': f'Bearer {token}',
                     'Content-Type': 'application/json',
                     'x-openclaw-agent-id': agent_id,
+                    'x-openclaw-scopes': 'operator.read,operator.write',
                 },
             ) as response:
                 if response.status_code != 200:
@@ -1119,6 +1120,147 @@ def oc_session_history(sessionKey: str, limit: int = 40) -> dict:
 
     # Return only the last N chat messages
     return {'sessionKey': sessionKey, 'messages': messages[-limit:]}
+
+
+@app.get('/api/oc/memory/status')
+def oc_memory_status() -> list[dict]:
+    """Proxy OpenClaw memory status (per-agent index info)."""
+    result = run_openclaw_command(['memory', 'status', '--json'])
+    if not result.ok:
+        raise HTTPException(status_code=500, detail=result.stderr or 'openclaw memory status failed')
+    return json.loads(result.stdout)
+
+
+class OcMemorySearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    agent_id: str = 'main'
+    max_results: int = Field(default=10, ge=1, le=50)
+
+
+@app.post('/api/oc/memory/search')
+def oc_memory_search(body: OcMemorySearchRequest) -> dict:
+    """Proxy OpenClaw memory search (vector + BM25 hybrid)."""
+    args = [
+        'memory', 'search',
+        '--query', body.query,
+        '--agent', body.agent_id,
+        '--max-results', str(body.max_results),
+        '--json',
+    ]
+    result = run_openclaw_command(args)
+    if not result.ok:
+        raise HTTPException(status_code=500, detail=result.stderr or 'openclaw memory search failed')
+    return json.loads(result.stdout)
+
+
+@app.post('/api/oc/memory/reindex')
+def oc_memory_reindex(agent_id: str = 'main', force: bool = False) -> dict:
+    """Trigger OpenClaw memory reindex."""
+    args = ['memory', 'index', '--agent', agent_id]
+    if force:
+        args.append('--force')
+    result = run_openclaw_command(args)
+    if not result.ok:
+        raise HTTPException(status_code=500, detail=result.stderr or 'openclaw memory reindex failed')
+    return {'ok': True, 'output': result.stdout.strip()}
+
+
+@app.get('/api/oc/memory/files')
+def oc_memory_files(agent_id: str = 'main') -> dict:
+    """List memory files for an agent from the workspace filesystem.
+    Returns both raw file listing and OC index status for comparison."""
+    # Determine workspace for this agent
+    agents_result = run_openclaw_command(['agents', 'list', '--json'])
+    workspace_dir = str(WORKSPACE_ROOT)
+    if agents_result.ok:
+        agents = json.loads(agents_result.stdout)
+        for agent in agents:
+            if agent.get('id') == agent_id and agent.get('workspace'):
+                workspace_dir = agent['workspace']
+                break
+
+    workspace_path = Path(workspace_dir)
+    memory_dir = workspace_path / 'memory'
+    memory_md = workspace_path / 'MEMORY.md'
+
+    files = []
+
+    # MEMORY.md (long-term)
+    if memory_md.exists():
+        text = memory_md.read_text(encoding='utf-8')
+        files.append({
+            'path': 'MEMORY.md',
+            'type': 'long_term',
+            'date_label': None,
+            'word_count': len(text.split()),
+            'char_count': len(text),
+            'modified': datetime.fromtimestamp(memory_md.stat().st_mtime, timezone.utc).isoformat(),
+            'summary': _first_meaningful_line(text),
+        })
+
+    # memory/*.md (daily/other)
+    if memory_dir.exists():
+        for path in sorted(memory_dir.glob('*.md'), reverse=True):
+            text = path.read_text(encoding='utf-8')
+            files.append({
+                'path': f'memory/{path.name}',
+                'type': 'daily',
+                'date_label': path.stem,
+                'word_count': len(text.split()),
+                'char_count': len(text),
+                'modified': datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(),
+                'summary': _first_meaningful_line(text),
+            })
+
+    return {'agent_id': agent_id, 'workspace': workspace_dir, 'files': files}
+
+
+@app.get('/api/oc/memory/file')
+def oc_memory_file(path: str, agent_id: str = 'main') -> dict:
+    """Read a specific memory file's content."""
+    # Determine workspace for this agent
+    agents_result = run_openclaw_command(['agents', 'list', '--json'])
+    workspace_dir = str(WORKSPACE_ROOT)
+    if agents_result.ok:
+        agents = json.loads(agents_result.stdout)
+        for agent in agents:
+            if agent.get('id') == agent_id and agent.get('workspace'):
+                workspace_dir = agent['workspace']
+                break
+
+    workspace_path = Path(workspace_dir)
+
+    # Security: only allow MEMORY.md and memory/*.md
+    safe_prefixes = ('MEMORY.md', 'memory/')
+    if not any(path.startswith(p) for p in safe_prefixes):
+        raise HTTPException(status_code=403, detail='Path not allowed — only MEMORY.md and memory/*.md')
+
+    file_path = workspace_path / path
+    resolved = file_path.resolve()
+    if not str(resolved).startswith(str(workspace_path.resolve())):
+        raise HTTPException(status_code=403, detail='Path traversal not allowed')
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail='File not found')
+
+    text = file_path.read_text(encoding='utf-8')
+    return {
+        'path': path,
+        'agent_id': agent_id,
+        'content': text,
+        'word_count': len(text.split()),
+        'char_count': len(text),
+        'modified': datetime.fromtimestamp(file_path.stat().st_mtime, timezone.utc).isoformat(),
+    }
+
+
+def _first_meaningful_line(text: str) -> str:
+    """Extract first non-header, non-empty line as a summary."""
+    for line in text.splitlines():
+        stripped = line.strip().lstrip('#').strip().strip('-').strip()
+        if stripped and len(stripped) > 5:
+            return stripped[:200]
+    return 'Empty file'
 
 
 @app.get('/api/agent-profiles', response_model=list[AgentProfileRecord])

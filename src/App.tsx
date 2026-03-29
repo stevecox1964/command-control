@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, Outlet, Route, Routes } from 'react-router-dom'
 import { Group, Panel, Separator } from 'react-resizable-panels'
-import { fetchMemoryDocument, fetchMemoryList, ingestMemory } from './lib/api'
+// Old parallel memory API (deprecated — now using OC native memory via ocMemory.ts)
+// import { fetchMemoryDocument, fetchMemoryList, ingestMemory } from './lib/api'
+import { type OcMemoryFile, type OcMemoryFileContent, type OcMemorySearchResult, type OcMemoryStatus, fetchMemoryFiles, fetchMemoryFileContent, fetchMemoryStatus, searchMemory, reindexMemory } from './lib/ocMemory'
 import { createTask, deleteTask, fetchTaskRuns, fetchTasks, runTask, updateTask } from './lib/tasks'
 import { fetchOcHealth, fetchOcLogs, fetchOcSessions, fetchOcStatus } from './lib/oc'
 import { type OcAgent, type ChatMessage as OcChatMessage, fetchOcAgents, sendMessage as sendOcMessage, fetchSessionHistory } from './lib/ocChat'
@@ -35,21 +37,7 @@ type ModuleConfig = {
   detailText: string[]
 }
 
-type MemoryListItem = {
-  id: number
-  title: string
-  doc_type: 'daily' | 'long_term'
-  source_path: string
-  date_label: string | null
-  word_count: number
-  char_count: number
-  updated_at: string
-  summary: string
-}
-
-type MemoryDocument = MemoryListItem & {
-  content: string
-}
+// Old memory types (deprecated — now using OcMemory* types from ocMemory.ts)
 
 const modules: ModuleConfig[] = [
   {
@@ -1126,26 +1114,35 @@ function SystemPage() {
 }
 
 function MemoryPage() {
-  const [items, setItems] = useState<MemoryListItem[]>([])
-  const [selectedId, setSelectedId] = useState<number | null>(null)
-  const [selectedDoc, setSelectedDoc] = useState<MemoryDocument | null>(null)
+  const [agents, setAgents] = useState<OcAgent[]>([])
+  const [selectedAgentId, setSelectedAgentId] = useState<string>('main')
+  const [files, setFiles] = useState<OcMemoryFile[]>([])
+  const [selectedPath, setSelectedPath] = useState<string | null>(null)
+  const [selectedDoc, setSelectedDoc] = useState<OcMemoryFileContent | null>(null)
+  const [statuses, setStatuses] = useState<OcMemoryStatus[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [ingestStatus, setIngestStatus] = useState<string>('')
+  const [notice, setNotice] = useState<string>('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<OcMemorySearchResult[] | null>(null)
+  const [searching, setSearching] = useState(false)
+
+  const agentStatus = statuses.find((s) => s.agentId === selectedAgentId)
 
   async function loadMemory() {
     setLoading(true)
     setError(null)
     try {
-      const list = await fetchMemoryList()
-      setItems(list)
-      const nextSelected = selectedId ?? list[0]?.id ?? null
-      setSelectedId(nextSelected)
-      if (nextSelected != null) {
-        const doc = await fetchMemoryDocument(nextSelected)
-        setSelectedDoc(doc)
-      } else {
-        setSelectedDoc(null)
+      const [agentData, statusData, fileData] = await Promise.all([
+        fetchOcAgents(),
+        fetchMemoryStatus(),
+        fetchMemoryFiles(selectedAgentId),
+      ])
+      setAgents(agentData)
+      setStatuses(statusData)
+      setFiles(fileData.files)
+      if (!selectedPath && fileData.files.length > 0) {
+        setSelectedPath(fileData.files[0].path)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load memory')
@@ -1156,37 +1153,60 @@ function MemoryPage() {
 
   useEffect(() => {
     void loadMemory()
-  }, [])
+  }, [selectedAgentId])
 
   useEffect(() => {
-    if (selectedId == null) return
-    void fetchMemoryDocument(selectedId)
+    if (!selectedPath) return
+    void fetchMemoryFileContent(selectedPath, selectedAgentId)
       .then(setSelectedDoc)
       .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : 'Failed to load memory document')
+        setError(err instanceof Error ? err.message : 'Failed to load memory file')
       })
-  }, [selectedId])
+  }, [selectedPath, selectedAgentId])
+
+  async function handleReindex() {
+    try {
+      const result = await reindexMemory(selectedAgentId, true)
+      setNotice(result.output || 'Reindex triggered')
+      await loadMemory()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to reindex')
+    }
+  }
+
+  async function handleSearch(event: React.FormEvent) {
+    event.preventDefault()
+    if (!searchQuery.trim()) {
+      setSearchResults(null)
+      return
+    }
+    setSearching(true)
+    setError(null)
+    try {
+      const data = await searchMemory(searchQuery.trim(), selectedAgentId, 10)
+      setSearchResults(data.results ?? [])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Search failed')
+    } finally {
+      setSearching(false)
+    }
+  }
+
+  function handleClearSearch() {
+    setSearchQuery('')
+    setSearchResults(null)
+  }
 
   const grouped = useMemo(() => {
     return Object.entries(
-      items.reduce<Record<string, MemoryListItem[]>>((acc, entry) => {
-        const key = entry.doc_type === 'long_term' ? 'Long-Term' : entry.date_label?.slice(0, 7) ?? 'Daily'
+      files.reduce<Record<string, OcMemoryFile[]>>((acc, file) => {
+        const key = file.type === 'long_term' ? 'Long-Term' : file.date_label?.slice(0, 7) ?? 'Daily'
         acc[key] ??= []
-        acc[key].push(entry)
+        acc[key].push(file)
         return acc
       }, {}),
     )
-  }, [items])
-
-  async function handleIngest() {
-    try {
-      const result = await ingestMemory()
-      setIngestStatus(`Ingested ${result.ingested}, skipped ${result.skipped}, total ${result.total}`)
-      await loadMemory()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to ingest memory')
-    }
-  }
+  }, [files])
 
   return (
     <section className="page memory-page">
@@ -1195,95 +1215,141 @@ function MemoryPage() {
           <p className="eyebrow">Module</p>
           <h2>Memory</h2>
           <p className="page-description">
-            Real local memory files ingested through FastAPI into SQLite. Vector search comes next.
+            OpenClaw memory — semantic search, daily notes, and long-term memory across agents.
           </p>
         </div>
         <div className="page-header-actions">
-          <button className="secondary" onClick={() => void loadMemory()}>
-            Refresh
-          </button>
-          <button className="primary" onClick={() => void handleIngest()}>
-            Ingest
-          </button>
+          <select
+            className="section-search"
+            value={selectedAgentId}
+            onChange={(e) => {
+              setSelectedAgentId(e.target.value)
+              setSelectedPath(null)
+              setSelectedDoc(null)
+              setSearchResults(null)
+            }}
+            style={{ width: 'auto', minWidth: 120 }}
+          >
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.identityEmoji ?? '🤖'} {a.identityName ?? a.id}
+              </option>
+            ))}
+          </select>
+          <button className="secondary" onClick={() => void loadMemory()}>Refresh</button>
+          <button className="primary" onClick={() => void handleReindex()}>Reindex</button>
         </div>
       </div>
 
       {error ? <div className="notice error">{error}</div> : null}
-      {ingestStatus ? <div className="notice success">{ingestStatus}</div> : null}
+      {notice ? <div className="notice success">{notice}</div> : null}
 
       <div className="metrics-grid">
         <article className="metric-card">
-          <p className="eyebrow">Documents</p>
-          <strong>{items.length}</strong>
-          <span>Currently indexed into SQLite</span>
+          <p className="eyebrow">Files</p>
+          <strong>{agentStatus?.status.files ?? files.length}</strong>
+          <span>Indexed in OpenClaw</span>
         </article>
         <article className="metric-card">
-          <p className="eyebrow">Daily Files</p>
-          <strong>{items.filter((item) => item.doc_type === 'daily').length}</strong>
-          <span>Journal-style memories</span>
+          <p className="eyebrow">Chunks</p>
+          <strong>{agentStatus?.status.chunks ?? 0}</strong>
+          <span>Embedded vector chunks</span>
         </article>
         <article className="metric-card">
-          <p className="eyebrow">Long-Term</p>
-          <strong>{items.filter((item) => item.doc_type === 'long_term').length}</strong>
-          <span>Curated memory documents</span>
+          <p className="eyebrow">Provider</p>
+          <strong>{agentStatus?.status.provider ?? '—'}</strong>
+          <span>{agentStatus?.status.model ?? 'No model'}</span>
+        </article>
+        <article className="metric-card">
+          <p className="eyebrow">Search</p>
+          <strong>{agentStatus?.status.fts?.available ? 'Hybrid' : 'Vector'}</strong>
+          <span>{agentStatus?.status.vector?.available ? `${agentStatus.status.vector.dims ?? '?'}d vectors` : 'No vector'}</span>
         </article>
       </div>
 
       <Group orientation="horizontal" className="memory-panels">
         <Panel defaultSize="34%" minSize="24%">
           <div className="memory-index">
-            <input
-              className="section-search"
-              placeholder="Search memory..."
-              aria-label="Search memory"
-              disabled
-            />
+            <form onSubmit={handleSearch} style={{ display: 'flex', gap: 6 }}>
+              <input
+                className="section-search"
+                placeholder="Semantic search memory..."
+                aria-label="Search memory"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{ flex: 1 }}
+              />
+              <button className="primary" type="submit" disabled={searching} style={{ whiteSpace: 'nowrap' }}>
+                {searching ? '…' : 'Search'}
+              </button>
+            </form>
 
-            <article className="pinned-card">
-              <p className="eyebrow">Backend</p>
-              <h3>SQLite Memory Index</h3>
-              <p>
-                Files from the workspace are now intended to flow through FastAPI into a local SQLite database.
-              </p>
-              <div className="meta-row">
-                <span>API on :8000</span>
-                <span>Search next</span>
+            {searchResults !== null ? (
+              <div className="group-stack">
+                <div className="group-label-row">
+                  <p className="eyebrow">Search Results</p>
+                  <button className="secondary" onClick={handleClearSearch} style={{ fontSize: '0.75rem', padding: '2px 8px' }}>Clear</button>
+                </div>
+                {searchResults.length === 0 ? (
+                  <p style={{ padding: '8px 12px', opacity: 0.6 }}>No results found.</p>
+                ) : (
+                  <section className="group-card">
+                    <div className="entry-list">
+                      {searchResults.map((result, i) => (
+                        <button
+                          key={`${result.path}-${result.startLine}-${i}`}
+                          className={`entry-item ${selectedPath === result.path ? 'selected' : ''}`}
+                          onClick={() => setSelectedPath(result.path)}
+                        >
+                          <div>
+                            <strong>{result.path}</strong>
+                            <p style={{ fontSize: '0.75rem', opacity: 0.8 }}>{result.snippet.slice(0, 120)}…</p>
+                          </div>
+                          <div className="entry-meta">
+                            <span>L{result.startLine}–{result.endLine}</span>
+                            <span>{(result.score * 100).toFixed(0)}%</span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                )}
               </div>
-            </article>
+            ) : (
+              <div className="group-stack">
+                <div className="group-label-row">
+                  <p className="eyebrow">Memory Files</p>
+                  <span>{loading ? 'Loading…' : `${files.length} files`}</span>
+                </div>
 
-            <div className="group-stack">
-              <div className="group-label-row">
-                <p className="eyebrow">Indexed Files</p>
-                <span>{loading ? 'Loading…' : `${items.length} items`}</span>
+                {grouped.map(([group, entries]) => (
+                  <section key={group} className="group-card">
+                    <div className="group-header">
+                      <h4>{group}</h4>
+                      <span>{entries.length}</span>
+                    </div>
+                    <div className="entry-list">
+                      {entries.map((file) => (
+                        <button
+                          key={file.path}
+                          className={`entry-item ${file.path === selectedPath ? 'selected' : ''}`}
+                          onClick={() => setSelectedPath(file.path)}
+                        >
+                          <div>
+                            <strong>{file.date_label ?? file.path}</strong>
+                            <p>{file.summary}</p>
+                          </div>
+                          <div className="entry-meta">
+                            <span>{file.type}</span>
+                            <span>{file.word_count} words</span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                ))}
               </div>
-
-              {grouped.map(([group, entries]) => (
-                <section key={group} className="group-card">
-                  <div className="group-header">
-                    <h4>{group}</h4>
-                    <span>{entries.length}</span>
-                  </div>
-                  <div className="entry-list">
-                    {entries.map((entry) => (
-                      <button
-                        key={entry.id}
-                        className={`entry-item ${entry.id === selectedId ? 'selected' : ''}`}
-                        onClick={() => setSelectedId(entry.id)}
-                      >
-                        <div>
-                          <strong>{entry.title}</strong>
-                          <p>{entry.summary}</p>
-                        </div>
-                        <div className="entry-meta">
-                          <span>{entry.doc_type}</span>
-                          <span>{entry.word_count} words</span>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </section>
-              ))}
-            </div>
+            )}
           </div>
         </Panel>
 
@@ -1293,37 +1359,23 @@ function MemoryPage() {
           <article className="memory-detail">
             <div className="detail-header">
               <div>
-                <p className="eyebrow">Selected Entry</p>
-                <h3>{selectedDoc?.title ?? 'No memory selected'}</h3>
+                <p className="eyebrow">{selectedAgentId}</p>
+                <h3>{selectedDoc?.path ?? 'No file selected'}</h3>
               </div>
               <div className="detail-meta">
-                <span>{selectedDoc?.doc_type ?? '—'}</span>
-                <span>{selectedDoc?.source_path ?? 'No source'}</span>
                 <span>{selectedDoc ? `${selectedDoc.word_count} words` : '—'}</span>
+                <span>{selectedDoc?.modified ? new Date(selectedDoc.modified).toLocaleString() : '—'}</span>
               </div>
             </div>
 
             <div className="detail-body">
               {selectedDoc ? (
-                <>
-                  <div className="time-title-row">
-                    <span className="time-link">Source</span>
-                    <strong>{selectedDoc.summary}</strong>
-                  </div>
-
-                  <section>
-                    <h4>Path</h4>
-                    <p>{selectedDoc.source_path}</p>
-                  </section>
-
-                  <section>
-                    <h4>Contents</h4>
-                    <pre className="memory-content">{selectedDoc.content}</pre>
-                  </section>
-                </>
+                <section>
+                  <pre className="memory-content">{selectedDoc.content}</pre>
+                </section>
               ) : (
                 <section>
-                  <p>Once the backend is running, indexed memory documents will appear here.</p>
+                  <p>Select a memory file or search to view contents.</p>
                 </section>
               )}
             </div>
