@@ -4,7 +4,12 @@ import { Group, Panel, Separator } from 'react-resizable-panels'
 // Old parallel memory API (deprecated — now using OC native memory via ocMemory.ts)
 // import { fetchMemoryDocument, fetchMemoryList, ingestMemory } from './lib/api'
 import { type OcMemoryFile, type OcMemoryFileContent, type OcMemorySearchResult, type OcMemoryStatus, fetchMemoryFiles, fetchMemoryFileContent, fetchMemoryStatus, searchMemory, reindexMemory } from './lib/ocMemory'
-import { createTask, deleteTask, fetchTaskRuns, fetchTasks, runTask, updateTask } from './lib/tasks'
+import {
+  type TaskDefinition, type TaskRun, type WorkflowDefinition, type WorkflowStep, type QueueItem,
+  fetchTasks, createTask, updateTask, deleteTask, runTask, fetchTaskRuns,
+  fetchWorkflows, createWorkflow, updateWorkflow, deleteWorkflow, runWorkflow, fetchWorkflowRuns,
+  fetchQueue, cancelQueueItem, retryQueueItem,
+} from './lib/tasks'
 import { fetchOcHealth, fetchOcLogs, fetchOcSessions, fetchOcStatus } from './lib/oc'
 import { type OcAgent, type ChatMessage as OcChatMessage, fetchOcAgents, sendMessage as sendOcMessage, fetchSessionHistory } from './lib/ocChat'
 import './App.css'
@@ -148,27 +153,31 @@ const modules: ModuleConfig[] = [
     key: 'workflows',
     label: 'Workflows',
     path: '/workflows',
-    eyebrow: 'Flow',
+    eyebrow: 'Orchestration',
     title: 'Workflows',
-    description: 'Define future multi-step workflows that will orchestrate sequences of tasks and agents.',
+    description: 'Reusable orchestrations that chain task definitions into sequences.',
     primaryAction: 'New Workflow',
-    secondaryAction: 'Open Workflow',
-    cards: [
-      { title: 'Workflows', value: '2', note: 'early concepts only' },
-      { title: 'Sequences', value: '0', note: 'not built yet' },
-      { title: 'Milestones', value: '3', note: 'tasks, agents, settings' },
-    ],
-    listTitle: 'Workflow List',
-    listItems: [
-      { name: 'Research → Distill → Package', meta: 'future orchestration flow', status: 'Planned' },
-      { name: 'Usage Monitor → Pause', meta: 'control flow', status: 'Draft' },
-      { name: 'Video Harvest → Summary', meta: 'external integration later', status: 'Planned' },
-    ],
-    detailTitle: 'Workflows control stub',
-    detailText: [
-      'Workflows will become the place where sequences of tasks and agents are stitched together into real execution flows.',
-      'For now this is still a placeholder until the workflow model is implemented properly.',
-    ],
+    secondaryAction: 'Refresh',
+    cards: [],
+    listTitle: '',
+    listItems: [],
+    detailTitle: '',
+    detailText: [],
+  },
+  {
+    key: 'queue',
+    label: 'Queue',
+    path: '/queue',
+    eyebrow: 'Runtime',
+    title: 'Queue',
+    description: 'Live execution queue — pending, running, and completed work items.',
+    primaryAction: 'Refresh',
+    secondaryAction: 'View Runs',
+    cards: [],
+    listTitle: '',
+    listItems: [],
+    detailTitle: '',
+    detailText: [],
   },
   {
     key: 'memory',
@@ -276,6 +285,10 @@ function App() {
             <Route key={module.key} path={module.path.slice(1)} element={<MemoryPage />} />
           ) : module.key === 'tasks' ? (
             <Route key={module.key} path={module.path.slice(1)} element={<TasksPage />} />
+          ) : module.key === 'workflows' ? (
+            <Route key={module.key} path={module.path.slice(1)} element={<WorkflowsPage />} />
+          ) : module.key === 'queue' ? (
+            <Route key={module.key} path={module.path.slice(1)} element={<QueuePage />} />
           ) : module.key === 'agents' ? (
             <Route key={module.key} path={module.path.slice(1)} element={<AgentsPage />} />
           ) : module.key === 'system' ? (
@@ -443,28 +456,43 @@ function ModuleStubPage({ module }: { module: ModuleConfig }) {
   )
 }
 
+const TASK_TYPES = ['web_fetch','script','agent_job','coding','review','reminder','check','transform','notification','approval','custom'] as const
+const MODEL_PROFILES = ['token_light','balanced','coding_heavy','high_reasoning','premium'] as const
+const AGENT_MODES = ['auto','fixed','pool'] as const
+const REASONING_LEVELS = ['low','medium','high'] as const
+const BUDGET_POLICIES = ['cheap','balanced','premium'] as const
+
+const EMPTY_TASK_FORM = {
+  name: '',
+  description: '',
+  task_type: 'web_fetch' as string,
+  enabled: true,
+  trigger_modes: 'manual',
+  execution_backend: 'openclaw' as string,
+  assigned_agent_id: '',
+  allowed_agent_ids: '',
+  agent_selection_mode: 'auto' as string,
+  required_capabilities: '',
+  model_profile: 'balanced' as string,
+  max_tokens: '',
+  reasoning_level: 'medium' as string,
+  budget_policy: 'balanced' as string,
+  priority: '5',
+  timeout_seconds: '300',
+  tags: '',
+}
+
 function TasksPage() {
-  const [tasks, setTasks] = useState<any[]>([])
-  const [selectedId, setSelectedId] = useState<number | null>(null)
-  const [runs, setRuns] = useState<any[]>([])
+  const [tasks, setTasks] = useState<TaskDefinition[]>([])
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [runs, setRuns] = useState<TaskRun[]>([])
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string>('')
-  const [showCreateModal, setShowCreateModal] = useState(false)
-  const [showEditModal, setShowEditModal] = useState(false)
-  const emptyForm = {
-    name: '',
-    task_type: 'manual',
-    enabled: true,
-    interval_minutes: '',
-    command: '',
-    working_directory: '',
-    target_url: '',
-    notes: '',
-  }
-  const [form, setForm] = useState(emptyForm)
+  const [showModal, setShowModal] = useState<'create' | 'edit' | null>(null)
+  const [form, setForm] = useState(EMPTY_TASK_FORM)
 
-  const selectedTask = tasks.find((task) => task.id === selectedId) ?? tasks[0] ?? null
-  const selectedIndex = selectedTask ? tasks.findIndex((task) => task.id === selectedTask.id) : -1
+  const selectedTask = tasks.find((t) => t.id === selectedId) ?? tasks[0] ?? null
+  const selectedIndex = selectedTask ? tasks.findIndex((t) => t.id === selectedTask.id) : -1
   const previousTask = selectedIndex > 0 ? tasks[selectedIndex - 1] : null
   const nextTask = selectedIndex >= 0 && selectedIndex < tasks.length - 1 ? tasks[selectedIndex + 1] : null
 
@@ -475,7 +503,7 @@ function TasksPage() {
       setTasks(data)
       const nextId = selectedId ?? data[0]?.id ?? null
       setSelectedId(nextId)
-      if (nextId != null) {
+      if (nextId) {
         const runData = await fetchTaskRuns(nextId)
         setRuns(runData)
       } else {
@@ -486,85 +514,75 @@ function TasksPage() {
     }
   }
 
-  useEffect(() => {
-    void loadTasks()
-  }, [])
+  useEffect(() => { void loadTasks() }, [])
 
   useEffect(() => {
-    if (selectedTask?.id == null) return
-    void fetchTaskRuns(selectedTask.id)
-      .then(setRuns)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Failed to load task runs'))
+    if (!selectedTask?.id) return
+    void fetchTaskRuns(selectedTask.id).then(setRuns).catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to load runs'))
   }, [selectedTask?.id])
 
-  async function handleCreateTask(event: React.FormEvent) {
-    event.preventDefault()
-    try {
-      await createTask({
-        name: form.name,
-        task_type: form.task_type as any,
-        enabled: form.enabled,
-        interval_minutes: form.interval_minutes ? Number(form.interval_minutes) : null,
-        command: form.command || null,
-        working_directory: form.working_directory || null,
-        target_url: form.target_url || null,
-        notes: form.notes || null,
-      })
-      setNotice('Task created')
-      setShowCreateModal(false)
-      setForm(emptyForm)
-      await loadTasks()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create task')
+  function formToPayload() {
+    return {
+      name: form.name,
+      description: form.description || null,
+      task_type: form.task_type,
+      enabled: form.enabled,
+      trigger_modes: form.trigger_modes.split(',').map(s => s.trim()).filter(Boolean),
+      execution_backend: form.execution_backend,
+      assigned_agent_id: form.assigned_agent_id || null,
+      allowed_agent_ids: form.allowed_agent_ids.split(',').map(s => s.trim()).filter(Boolean),
+      agent_selection_mode: form.agent_selection_mode,
+      required_capabilities: form.required_capabilities.split(',').map(s => s.trim()).filter(Boolean),
+      model_profile: form.model_profile,
+      max_tokens: form.max_tokens ? Number(form.max_tokens) : null,
+      reasoning_level: form.reasoning_level,
+      budget_policy: form.budget_policy,
+      priority: Number(form.priority) || 5,
+      timeout_seconds: Number(form.timeout_seconds) || 300,
+      tags: form.tags.split(',').map(s => s.trim()).filter(Boolean),
     }
   }
 
-  async function handleSaveTask(event: React.FormEvent) {
+  async function handleSubmit(event: React.FormEvent) {
     event.preventDefault()
-    if (!selectedTask) return
     try {
-      await updateTask(selectedTask.id, {
-        name: form.name,
-        task_type: form.task_type as any,
-        enabled: form.enabled,
-        interval_minutes: form.interval_minutes ? Number(form.interval_minutes) : null,
-        command: form.command || null,
-        working_directory: form.working_directory || null,
-        target_url: form.target_url || null,
-        notes: form.notes || null,
-      })
-      setNotice('Task updated')
-      setShowEditModal(false)
-      setForm(emptyForm)
-      setSelectedId(selectedTask.id)
+      if (showModal === 'edit' && selectedTask) {
+        await updateTask(selectedTask.id, formToPayload())
+        setNotice('Task updated')
+      } else {
+        await createTask(formToPayload())
+        setNotice('Task created')
+      }
+      setShowModal(null)
+      setForm(EMPTY_TASK_FORM)
       await loadTasks()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update task')
+      setError(err instanceof Error ? err.message : 'Failed to save task')
     }
   }
 
-  async function handleRunTask(taskId: number) {
+  async function handleRun(id: string) {
     try {
-      const result = await runTask(taskId)
-      setNotice(`Task run finished with status: ${result.status}`)
+      const result = await runTask(id)
+      setNotice(`Queued — queue item: ${result.queue_item_id} · status: ${result.status}`)
       await loadTasks()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to run task')
     }
   }
 
-  async function handleToggleTask(task: any) {
+  async function handleToggle(task: TaskDefinition) {
     try {
       await updateTask(task.id, { enabled: !task.enabled })
       await loadTasks()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update task')
+      setError(err instanceof Error ? err.message : 'Failed to toggle task')
     }
   }
 
-  async function handleDeleteTask(taskId: number) {
+  async function handleDelete(id: string) {
     try {
-      await deleteTask(taskId)
+      await deleteTask(id)
       setNotice('Task deleted')
       setSelectedId(nextTask?.id ?? previousTask?.id ?? null)
       await loadTasks()
@@ -573,40 +591,49 @@ function TasksPage() {
     }
   }
 
-  function openEditModal() {
+  function openEdit() {
     if (!selectedTask) return
     setForm({
-      name: selectedTask.name ?? '',
-      task_type: selectedTask.task_type ?? 'manual',
-      enabled: Boolean(selectedTask.enabled),
-      interval_minutes: selectedTask.interval_minutes ? String(selectedTask.interval_minutes) : '',
-      command: selectedTask.command ?? '',
-      working_directory: selectedTask.working_directory ?? '',
-      target_url: selectedTask.target_url ?? '',
-      notes: selectedTask.notes ?? '',
+      name: selectedTask.name,
+      description: selectedTask.description ?? '',
+      task_type: selectedTask.task_type,
+      enabled: selectedTask.enabled,
+      trigger_modes: selectedTask.trigger_modes.join(', '),
+      execution_backend: selectedTask.execution_backend,
+      assigned_agent_id: selectedTask.assigned_agent_id ?? '',
+      allowed_agent_ids: selectedTask.allowed_agent_ids.join(', '),
+      agent_selection_mode: selectedTask.agent_selection_mode,
+      required_capabilities: selectedTask.required_capabilities.join(', '),
+      model_profile: selectedTask.model_profile,
+      max_tokens: selectedTask.max_tokens != null ? String(selectedTask.max_tokens) : '',
+      reasoning_level: selectedTask.reasoning_level,
+      budget_policy: selectedTask.budget_policy,
+      priority: String(selectedTask.priority),
+      timeout_seconds: String(selectedTask.timeout_seconds),
+      tags: selectedTask.tags.join(', '),
     })
-    setShowEditModal(true)
+    setShowModal('edit')
   }
 
-  function closeModals() {
-    setShowCreateModal(false)
-    setShowEditModal(false)
-    setForm(emptyForm)
+  function closeModal() {
+    setShowModal(null)
+    setForm(EMPTY_TASK_FORM)
   }
+
+  const enabledCount = tasks.filter(t => t.enabled).length
+  const scheduledCount = tasks.filter(t => t.trigger_modes.includes('schedule')).length
 
   return (
     <section className="page tasks-page">
       <div className="page-header">
         <div>
-          <p className="eyebrow">Operations</p>
+          <p className="eyebrow">Definitions</p>
           <h2>Tasks</h2>
-          <p className="page-description">
-            Real task definitions, scheduling, run-now execution, and execution history.
-          </p>
+          <p className="page-description">Reusable task definitions with agent routing and model policy.</p>
         </div>
         <div className="page-header-actions">
           <button className="secondary" onClick={() => void loadTasks()}>Refresh</button>
-          <button className="primary" onClick={() => setShowCreateModal(true)}>Create Task</button>
+          <button className="primary" onClick={() => { setForm(EMPTY_TASK_FORM); setShowModal('create') }}>New Task</button>
         </div>
       </div>
 
@@ -614,21 +641,9 @@ function TasksPage() {
       {notice ? <div className="notice success">{notice}</div> : null}
 
       <div className="metrics-grid">
-        <article className="metric-card">
-          <p className="eyebrow">Tasks</p>
-          <strong>{tasks.length}</strong>
-          <span>Total task definitions</span>
-        </article>
-        <article className="metric-card">
-          <p className="eyebrow">Enabled</p>
-          <strong>{tasks.filter((task) => task.enabled).length}</strong>
-          <span>Eligible to run</span>
-        </article>
-        <article className="metric-card">
-          <p className="eyebrow">Scheduled</p>
-          <strong>{tasks.filter((task) => task.interval_minutes).length}</strong>
-          <span>Recurring interval tasks</span>
-        </article>
+        <article className="metric-card"><p className="eyebrow">Definitions</p><strong>{tasks.length}</strong><span>Total task definitions</span></article>
+        <article className="metric-card"><p className="eyebrow">Enabled</p><strong>{enabledCount}</strong><span>Eligible to run</span></article>
+        <article className="metric-card"><p className="eyebrow">Scheduled</p><strong>{scheduledCount}</strong><span>Have schedule trigger</span></article>
       </div>
 
       <Group orientation="horizontal" className="memory-panels">
@@ -636,7 +651,7 @@ function TasksPage() {
           <div className="memory-index">
             <div className="group-stack">
               <div className="group-label-row">
-                <p className="eyebrow">Task Queue</p>
+                <p className="eyebrow">Task Definitions</p>
                 <span>{tasks.length} items</span>
               </div>
               <section className="group-card">
@@ -645,11 +660,11 @@ function TasksPage() {
                     <button key={task.id} className={`entry-item ${task.id === selectedTask?.id ? 'selected' : ''}`} onClick={() => setSelectedId(task.id)}>
                       <div>
                         <strong>{task.name}</strong>
-                        <p>{task.task_type} · {task.interval_minutes ? `every ${task.interval_minutes}m` : 'manual trigger'}</p>
+                        <p>{task.task_type} · {task.model_profile} · {task.agent_selection_mode === 'fixed' ? (task.assigned_agent_id ?? 'unassigned') : task.agent_selection_mode}</p>
                       </div>
                       <div className="entry-meta">
                         <span>{task.enabled ? 'enabled' : 'disabled'}</span>
-                        <span>{task.last_status ?? 'never run'}</span>
+                        <span>{task.budget_policy}</span>
                       </div>
                     </button>
                   ))}
@@ -665,21 +680,17 @@ function TasksPage() {
           <article className="memory-detail">
             <div className="detail-header">
               <div className="task-detail-toprow">
-                <button className="nav-chev" disabled={!previousTask} onClick={() => previousTask && setSelectedId(previousTask.id)}>
-                  «
-                </button>
+                <button className="nav-chev" disabled={!previousTask} onClick={() => previousTask && setSelectedId(previousTask.id)}>«</button>
                 <div>
-                  <p className="eyebrow">Selected Task</p>
+                  <p className="eyebrow">Task Definition</p>
                   <h3>{selectedTask?.name ?? 'No task selected'}</h3>
                 </div>
-                <button className="nav-chev" disabled={!nextTask} onClick={() => nextTask && setSelectedId(nextTask.id)}>
-                  »
-                </button>
+                <button className="nav-chev" disabled={!nextTask} onClick={() => nextTask && setSelectedId(nextTask.id)}>»</button>
               </div>
               <div className="detail-meta">
                 <span>{selectedTask?.task_type ?? '—'}</span>
+                <span>{selectedTask?.model_profile ?? '—'}</span>
                 <span>{selectedTask?.enabled ? 'enabled' : 'disabled'}</span>
-                <span>{selectedTask?.last_status ?? 'never run'}</span>
               </div>
             </div>
 
@@ -687,41 +698,65 @@ function TasksPage() {
               {selectedTask ? (
                 <>
                   <div className="task-action-row">
-                    <button className="primary" onClick={() => void handleRunTask(selectedTask.id)}>Run Now</button>
-                    <button className="secondary" onClick={openEditModal}>Edit</button>
-                    <button className="secondary" onClick={() => void handleToggleTask(selectedTask)}>
+                    <button className="primary" onClick={() => void handleRun(selectedTask.id)}>Run Now</button>
+                    <button className="secondary" onClick={openEdit}>Edit</button>
+                    <button className="secondary" onClick={() => void handleToggle(selectedTask)}>
                       {selectedTask.enabled ? 'Disable' : 'Enable'}
                     </button>
-                    <button className="secondary danger" onClick={() => void handleDeleteTask(selectedTask.id)}>Delete</button>
+                    <button className="secondary danger" onClick={() => void handleDelete(selectedTask.id)}>Delete</button>
                   </div>
 
                   <section>
-                    <h4>Configuration</h4>
+                    <h4>Execution Routing</h4>
                     <ul>
-                      <li>Type: {selectedTask.task_type}</li>
-                      <li>Interval: {selectedTask.interval_minutes ? `${selectedTask.interval_minutes} minutes` : 'none'}</li>
-                      <li>Working dir: {selectedTask.working_directory ?? 'default project root'}</li>
-                      <li>Target URL: {selectedTask.target_url ?? '—'}</li>
+                      <li>Agent mode: {selectedTask.agent_selection_mode}</li>
+                      <li>Assigned agent: {selectedTask.assigned_agent_id ?? '—'}</li>
+                      <li>Allowed agents: {selectedTask.allowed_agent_ids.join(', ') || '—'}</li>
+                      <li>Required capabilities: {selectedTask.required_capabilities.join(', ') || '—'}</li>
                     </ul>
                   </section>
 
                   <section>
-                    <h4>Command / Payload</h4>
-                    <pre className="memory-content">{selectedTask.command || selectedTask.notes || 'No payload'}</pre>
+                    <h4>Model Policy</h4>
+                    <ul>
+                      <li>Profile: {selectedTask.model_profile}</li>
+                      <li>Reasoning: {selectedTask.reasoning_level}</li>
+                      <li>Budget: {selectedTask.budget_policy}</li>
+                      <li>Max tokens: {selectedTask.max_tokens ?? 'default'}</li>
+                    </ul>
                   </section>
 
                   <section>
-                    <h4>Recent Runs</h4>
+                    <h4>Scheduling &amp; Config</h4>
+                    <ul>
+                      <li>Triggers: {selectedTask.trigger_modes.join(', ')}</li>
+                      <li>Priority: {selectedTask.priority}</li>
+                      <li>Timeout: {selectedTask.timeout_seconds}s</li>
+                      <li>Retries: {selectedTask.retry_policy.max_retries} × {selectedTask.retry_policy.retry_delay_seconds}s</li>
+                      <li>Tags: {selectedTask.tags.join(', ') || '—'}</li>
+                    </ul>
+                  </section>
+
+                  {selectedTask.description ? (
+                    <section>
+                      <h4>Description</h4>
+                      <p>{selectedTask.description}</p>
+                    </section>
+                  ) : null}
+
+                  <section>
+                    <h4>Recent Task Runs</h4>
                     {runs.length ? (
                       <div className="runs-list">
                         {runs.map((run) => (
                           <article key={run.id} className="run-card">
                             <div className="group-header">
                               <strong>{run.status}</strong>
-                              <span>{run.duration_ms != null ? `${run.duration_ms} ms` : '—'}</span>
+                              <span>{run.trigger_source}</span>
                             </div>
-                            <p>{run.started_at}</p>
-                            <pre className="memory-content">{run.output}</pre>
+                            <p>{run.started_at ?? 'not started'}</p>
+                            {run.result_summary ? <p>{run.result_summary}</p> : null}
+                            {run.error_message ? <pre className="memory-content">{run.error_message}</pre> : null}
                           </article>
                         ))}
                       </div>
@@ -731,42 +766,524 @@ function TasksPage() {
                   </section>
                 </>
               ) : (
-                <section><p>Create or select a task to inspect it.</p></section>
+                <section><p>Create or select a task definition to inspect it.</p></section>
               )}
             </div>
           </article>
         </Panel>
       </Group>
 
-      {(showCreateModal || showEditModal) ? (
-        <div className="modal-backdrop" onClick={closeModals}>
-          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+      {showModal ? (
+        <div className="modal-backdrop" onClick={closeModal}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="group-header">
-              <h4>{showEditModal ? 'Edit Task' : 'Create Task'}</h4>
-              <button className="secondary" onClick={closeModals}>Close</button>
+              <h4>{showModal === 'edit' ? 'Edit Task' : 'New Task Definition'}</h4>
+              <button className="secondary" onClick={closeModal}>Close</button>
             </div>
-            <form className="task-form" onSubmit={showEditModal ? handleSaveTask : handleCreateTask}>
-              <input className="section-search" placeholder="Task name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+            <form className="task-form" onSubmit={handleSubmit}>
+              <p className="eyebrow" style={{ marginBottom: 4 }}>General</p>
+              <input className="section-search" placeholder="Task name *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+              <input className="section-search" placeholder="Description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
               <select className="section-search" value={form.task_type} onChange={(e) => setForm({ ...form, task_type: e.target.value })}>
-                <option value="manual">manual</option>
-                <option value="shell">shell</option>
-                <option value="python">python</option>
-                <option value="web_fetch">web_fetch</option>
+                {TASK_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
-              <input className="section-search" placeholder="Interval minutes (optional)" value={form.interval_minutes} onChange={(e) => setForm({ ...form, interval_minutes: e.target.value })} />
-              <input className="section-search" placeholder="Command or python code" value={form.command} onChange={(e) => setForm({ ...form, command: e.target.value })} />
-              <input className="section-search" placeholder="Target URL" value={form.target_url} onChange={(e) => setForm({ ...form, target_url: e.target.value })} />
-              <input className="section-search" placeholder="Working directory" value={form.working_directory} onChange={(e) => setForm({ ...form, working_directory: e.target.value })} />
-              <textarea className="section-search task-textarea" placeholder="Notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
               <label className="task-checkbox">
                 <input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
                 Enabled
               </label>
-              <button className="primary task-submit" type="submit">{showEditModal ? 'Save Task' : 'Create Task'}</button>
+              <input className="section-search" placeholder="Trigger modes (comma-separated: manual, schedule, event)" value={form.trigger_modes} onChange={(e) => setForm({ ...form, trigger_modes: e.target.value })} />
+
+              <p className="eyebrow" style={{ margin: '12px 0 4px' }}>Execution Routing</p>
+              <select className="section-search" value={form.agent_selection_mode} onChange={(e) => setForm({ ...form, agent_selection_mode: e.target.value })}>
+                {AGENT_MODES.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <input className="section-search" placeholder="Assigned agent ID (for fixed mode)" value={form.assigned_agent_id} onChange={(e) => setForm({ ...form, assigned_agent_id: e.target.value })} />
+              <input className="section-search" placeholder="Allowed agent IDs (comma-separated)" value={form.allowed_agent_ids} onChange={(e) => setForm({ ...form, allowed_agent_ids: e.target.value })} />
+              <input className="section-search" placeholder="Required capabilities (comma-separated)" value={form.required_capabilities} onChange={(e) => setForm({ ...form, required_capabilities: e.target.value })} />
+
+              <p className="eyebrow" style={{ margin: '12px 0 4px' }}>Model Policy</p>
+              <select className="section-search" value={form.model_profile} onChange={(e) => setForm({ ...form, model_profile: e.target.value })}>
+                {MODEL_PROFILES.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <select className="section-search" value={form.reasoning_level} onChange={(e) => setForm({ ...form, reasoning_level: e.target.value })}>
+                {REASONING_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
+              </select>
+              <select className="section-search" value={form.budget_policy} onChange={(e) => setForm({ ...form, budget_policy: e.target.value })}>
+                {BUDGET_POLICIES.map(b => <option key={b} value={b}>{b}</option>)}
+              </select>
+              <input className="section-search" placeholder="Max tokens (optional)" value={form.max_tokens} onChange={(e) => setForm({ ...form, max_tokens: e.target.value })} />
+
+              <p className="eyebrow" style={{ margin: '12px 0 4px' }}>Retry / Timeout</p>
+              <input className="section-search" placeholder="Priority (1–10)" value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} />
+              <input className="section-search" placeholder="Timeout seconds" value={form.timeout_seconds} onChange={(e) => setForm({ ...form, timeout_seconds: e.target.value })} />
+              <input className="section-search" placeholder="Tags (comma-separated)" value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} />
+
+              <button className="primary task-submit" type="submit">{showModal === 'edit' ? 'Save Task' : 'Create Task'}</button>
             </form>
           </div>
         </div>
       ) : null}
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Workflows Page
+// ---------------------------------------------------------------------------
+
+const EMPTY_WORKFLOW_FORM = {
+  name: '',
+  description: '',
+  enabled: true,
+  trigger_modes: 'manual',
+}
+
+function WorkflowsPage() {
+  const [workflows, setWorkflows] = useState<WorkflowDefinition[]>([])
+  const [allTasks, setAllTasks] = useState<TaskDefinition[]>([])
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string>('')
+  const [showModal, setShowModal] = useState<'create' | 'edit' | null>(null)
+  const [form, setForm] = useState(EMPTY_WORKFLOW_FORM)
+  const [steps, setSteps] = useState<WorkflowStep[]>([])
+  const [newStepTaskId, setNewStepTaskId] = useState('')
+
+  const selectedWorkflow = workflows.find(w => w.id === selectedId) ?? workflows[0] ?? null
+
+  async function loadData() {
+    setError(null)
+    try {
+      const [wfData, taskData] = await Promise.all([fetchWorkflows(), fetchTasks()])
+      setWorkflows(wfData)
+      setAllTasks(taskData)
+      if (!selectedId && wfData.length) setSelectedId(wfData[0].id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load workflows')
+    }
+  }
+
+  useEffect(() => { void loadData() }, [])
+
+  function openCreate() {
+    setForm(EMPTY_WORKFLOW_FORM)
+    setSteps([])
+    setNewStepTaskId(allTasks[0]?.id ?? '')
+    setShowModal('create')
+  }
+
+  function openEdit() {
+    if (!selectedWorkflow) return
+    setForm({
+      name: selectedWorkflow.name,
+      description: selectedWorkflow.description ?? '',
+      enabled: selectedWorkflow.enabled,
+      trigger_modes: selectedWorkflow.trigger_modes.join(', '),
+    })
+    setSteps(selectedWorkflow.steps)
+    setNewStepTaskId(allTasks[0]?.id ?? '')
+    setShowModal('edit')
+  }
+
+  function closeModal() {
+    setShowModal(null)
+    setForm(EMPTY_WORKFLOW_FORM)
+    setSteps([])
+  }
+
+  function addStep() {
+    if (!newStepTaskId) return
+    const task = allTasks.find(t => t.id === newStepTaskId)
+    const stepNum = steps.length + 1
+    const nextStepId = `step_${stepNum + 1}`
+    setSteps([...steps, {
+      step_id: `step_${stepNum}`,
+      task_definition_id: newStepTaskId,
+      name: task?.name ?? newStepTaskId,
+      on_success: 'complete',
+      on_failure: 'fail_workflow',
+      conditions: [],
+    }])
+  }
+
+  function removeStep(idx: number) {
+    setSteps(steps.filter((_, i) => i !== idx))
+  }
+
+  function updateStepTransition(idx: number, field: 'on_success' | 'on_failure', value: string) {
+    setSteps(steps.map((s, i) => i === idx ? { ...s, [field]: value } : s))
+  }
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault()
+    try {
+      const payload = {
+        name: form.name,
+        description: form.description || null,
+        enabled: form.enabled,
+        trigger_modes: form.trigger_modes.split(',').map(s => s.trim()).filter(Boolean),
+        steps,
+      }
+      if (showModal === 'edit' && selectedWorkflow) {
+        await updateWorkflow(selectedWorkflow.id, payload)
+        setNotice('Workflow updated')
+      } else {
+        await createWorkflow(payload)
+        setNotice('Workflow created')
+      }
+      closeModal()
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save workflow')
+    }
+  }
+
+  async function handleRun(id: string) {
+    try {
+      const result = await runWorkflow(id)
+      setNotice(`Workflow queued — status: ${result.status}`)
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to run workflow')
+    }
+  }
+
+  async function handleDelete(id: string) {
+    try {
+      await deleteWorkflow(id)
+      setNotice('Workflow deleted')
+      setSelectedId(null)
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete workflow')
+    }
+  }
+
+  const stepTaskName = (taskId: string) => allTasks.find(t => t.id === taskId)?.name ?? taskId
+
+  return (
+    <section className="page tasks-page">
+      <div className="page-header">
+        <div>
+          <p className="eyebrow">Orchestration</p>
+          <h2>Workflows</h2>
+          <p className="page-description">Reusable orchestrations that chain task definitions into sequences.</p>
+        </div>
+        <div className="page-header-actions">
+          <button className="secondary" onClick={() => void loadData()}>Refresh</button>
+          <button className="primary" onClick={openCreate}>New Workflow</button>
+        </div>
+      </div>
+
+      {error ? <div className="notice error">{error}</div> : null}
+      {notice ? <div className="notice success">{notice}</div> : null}
+
+      <div className="metrics-grid">
+        <article className="metric-card"><p className="eyebrow">Workflows</p><strong>{workflows.length}</strong><span>Definitions</span></article>
+        <article className="metric-card"><p className="eyebrow">Enabled</p><strong>{workflows.filter(w => w.enabled).length}</strong><span>Active</span></article>
+        <article className="metric-card"><p className="eyebrow">Task Defs</p><strong>{allTasks.length}</strong><span>Available as steps</span></article>
+      </div>
+
+      <Group orientation="horizontal" className="memory-panels">
+        <Panel defaultSize="38%" minSize="28%">
+          <div className="memory-index">
+            <div className="group-stack">
+              <div className="group-label-row">
+                <p className="eyebrow">Workflow Definitions</p>
+                <span>{workflows.length} items</span>
+              </div>
+              <section className="group-card">
+                <div className="entry-list">
+                  {workflows.map((wf) => (
+                    <button key={wf.id} className={`entry-item ${wf.id === selectedWorkflow?.id ? 'selected' : ''}`} onClick={() => setSelectedId(wf.id)}>
+                      <div>
+                        <strong>{wf.name}</strong>
+                        <p>{wf.steps.length} step{wf.steps.length !== 1 ? 's' : ''} · {wf.trigger_modes.join(', ')}</p>
+                      </div>
+                      <div className="entry-meta">
+                        <span>{wf.enabled ? 'enabled' : 'disabled'}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            </div>
+          </div>
+        </Panel>
+
+        <Separator className="resize-handle" />
+
+        <Panel defaultSize="62%" minSize="38%">
+          <article className="memory-detail">
+            {selectedWorkflow ? (
+              <>
+                <div className="detail-header">
+                  <div>
+                    <p className="eyebrow">Workflow</p>
+                    <h3>{selectedWorkflow.name}</h3>
+                  </div>
+                  <div className="detail-meta">
+                    <span>{selectedWorkflow.steps.length} steps</span>
+                    <span>{selectedWorkflow.enabled ? 'enabled' : 'disabled'}</span>
+                  </div>
+                </div>
+                <div className="detail-body">
+                  <div className="task-action-row">
+                    <button className="primary" onClick={() => void handleRun(selectedWorkflow.id)}>Run Now</button>
+                    <button className="secondary" onClick={openEdit}>Edit</button>
+                    <button className="secondary danger" onClick={() => void handleDelete(selectedWorkflow.id)}>Delete</button>
+                  </div>
+
+                  {selectedWorkflow.description ? <section><p>{selectedWorkflow.description}</p></section> : null}
+
+                  <section>
+                    <h4>Steps</h4>
+                    {selectedWorkflow.steps.length ? (
+                      <div className="runs-list">
+                        {selectedWorkflow.steps.map((step, i) => (
+                          <article key={step.step_id} className="run-card">
+                            <div className="group-header">
+                              <strong>{i + 1}. {step.name}</strong>
+                              <span>{step.step_id}</span>
+                            </div>
+                            <p>Task: {stepTaskName(step.task_definition_id)}</p>
+                            <p>On success → {step.on_success} · On failure → {step.on_failure}</p>
+                          </article>
+                        ))}
+                      </div>
+                    ) : <p>No steps defined.</p>}
+                  </section>
+
+                  <section>
+                    <h4>Triggers</h4>
+                    <p>{selectedWorkflow.trigger_modes.join(', ')}</p>
+                  </section>
+                </div>
+              </>
+            ) : (
+              <div className="detail-body"><section><p>Create or select a workflow definition.</p></section></div>
+            )}
+          </article>
+        </Panel>
+      </Group>
+
+      {showModal ? (
+        <div className="modal-backdrop" onClick={closeModal}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="group-header">
+              <h4>{showModal === 'edit' ? 'Edit Workflow' : 'New Workflow'}</h4>
+              <button className="secondary" onClick={closeModal}>Close</button>
+            </div>
+            <form className="task-form" onSubmit={handleSubmit}>
+              <input className="section-search" placeholder="Workflow name *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+              <input className="section-search" placeholder="Description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+              <input className="section-search" placeholder="Trigger modes (comma-separated)" value={form.trigger_modes} onChange={(e) => setForm({ ...form, trigger_modes: e.target.value })} />
+              <label className="task-checkbox">
+                <input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
+                Enabled
+              </label>
+
+              <p className="eyebrow" style={{ margin: '12px 0 4px' }}>Steps</p>
+              {steps.map((step, i) => (
+                <div key={step.step_id} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}>
+                  <span style={{ flex: 1, fontSize: '0.85rem' }}>{i + 1}. {step.name}</span>
+                  <select style={{ fontSize: '0.8rem' }} value={step.on_success} onChange={(e) => updateStepTransition(i, 'on_success', e.target.value)}>
+                    <option value="complete">→ complete</option>
+                    {steps.map((s, j) => j !== i && <option key={s.step_id} value={s.step_id}>→ {s.step_id}</option>)}
+                  </select>
+                  <button type="button" className="secondary" style={{ padding: '2px 8px', fontSize: '0.8rem' }} onClick={() => removeStep(i)}>✕</button>
+                </div>
+              ))}
+              <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                <select className="section-search" style={{ flex: 1 }} value={newStepTaskId} onChange={(e) => setNewStepTaskId(e.target.value)}>
+                  {allTasks.map(t => <option key={t.id} value={t.id}>{t.name} ({t.task_type})</option>)}
+                </select>
+                <button type="button" className="secondary" onClick={addStep}>Add Step</button>
+              </div>
+
+              <button className="primary task-submit" type="submit">{showModal === 'edit' ? 'Save Workflow' : 'Create Workflow'}</button>
+            </form>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Queue Page
+// ---------------------------------------------------------------------------
+
+const STATUS_FILTERS = ['all', 'queued', 'running', 'completed', 'failed', 'cancelled', 'blocked'] as const
+
+function QueuePage() {
+  const [items, setItems] = useState<QueueItem[]>([])
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [filter, setFilter] = useState<string>('all')
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string>('')
+
+  const selectedItem = items.find(i => i.id === selectedId) ?? items[0] ?? null
+
+  async function loadQueue() {
+    setError(null)
+    try {
+      const data = await fetchQueue(filter === 'all' ? undefined : filter)
+      setItems(data)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load queue')
+    }
+  }
+
+  useEffect(() => { void loadQueue() }, [filter])
+
+  async function handleCancel(id: string) {
+    try {
+      await cancelQueueItem(id)
+      setNotice('Item cancelled')
+      await loadQueue()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to cancel')
+    }
+  }
+
+  async function handleRetry(id: string) {
+    try {
+      await retryQueueItem(id)
+      setNotice('Item re-queued')
+      await loadQueue()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to retry')
+    }
+  }
+
+  const statusCounts: Record<string, number> = {}
+  items.forEach(item => { statusCounts[item.status] = (statusCounts[item.status] ?? 0) + 1 })
+  const running = statusCounts['running'] ?? 0
+  const queued = statusCounts['queued'] ?? 0
+  const failed = statusCounts['failed'] ?? 0
+
+  return (
+    <section className="page tasks-page">
+      <div className="page-header">
+        <div>
+          <p className="eyebrow">Runtime</p>
+          <h2>Queue</h2>
+          <p className="page-description">Live execution queue — pending, running, and completed work items.</p>
+        </div>
+        <div className="page-header-actions">
+          <button className="secondary" onClick={() => void loadQueue()}>Refresh</button>
+        </div>
+      </div>
+
+      {error ? <div className="notice error">{error}</div> : null}
+      {notice ? <div className="notice success">{notice}</div> : null}
+
+      <div className="metrics-grid">
+        <article className="metric-card"><p className="eyebrow">Running</p><strong>{running}</strong><span>Executing now</span></article>
+        <article className="metric-card"><p className="eyebrow">Queued</p><strong>{queued}</strong><span>Waiting to run</span></article>
+        <article className="metric-card"><p className="eyebrow">Failed</p><strong>{failed}</strong><span>Need attention</span></article>
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+        {STATUS_FILTERS.map(f => (
+          <button key={f} className={filter === f ? 'primary' : 'secondary'} style={{ padding: '4px 12px', fontSize: '0.8rem' }} onClick={() => setFilter(f)}>
+            {f}
+          </button>
+        ))}
+      </div>
+
+      <Group orientation="horizontal" className="memory-panels">
+        <Panel defaultSize="42%" minSize="28%">
+          <div className="memory-index">
+            <div className="group-stack">
+              <div className="group-label-row">
+                <p className="eyebrow">Queue Items</p>
+                <span>{items.length} items</span>
+              </div>
+              <section className="group-card">
+                <div className="entry-list">
+                  {items.length === 0 ? (
+                    <p style={{ padding: '12px', opacity: 0.6 }}>No items{filter !== 'all' ? ` with status "${filter}"` : ''}.</p>
+                  ) : items.map((item) => (
+                    <button key={item.id} className={`entry-item ${item.id === selectedItem?.id ? 'selected' : ''}`} onClick={() => setSelectedId(item.id)}>
+                      <div>
+                        <strong>{item.queue_item_type === 'workflow_run' ? '⛓ workflow' : item.source_definition_id.slice(0, 8) + '…'}</strong>
+                        <p>{item.queue_item_type} · {item.model_profile} · p{item.priority}</p>
+                      </div>
+                      <div className="entry-meta">
+                        <span className={`status-pill ${item.status === 'running' ? 'online' : ''}`}>{item.status}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            </div>
+          </div>
+        </Panel>
+
+        <Separator className="resize-handle" />
+
+        <Panel defaultSize="58%" minSize="38%">
+          <article className="memory-detail">
+            {selectedItem ? (
+              <>
+                <div className="detail-header">
+                  <div>
+                    <p className="eyebrow">Queue Item</p>
+                    <h3>{selectedItem.id.slice(0, 12)}…</h3>
+                  </div>
+                  <div className="detail-meta">
+                    <span>{selectedItem.status}</span>
+                    <span>{selectedItem.queue_item_type}</span>
+                    <span>p{selectedItem.priority}</span>
+                  </div>
+                </div>
+                <div className="detail-body">
+                  <div className="task-action-row">
+                    {['queued', 'running', 'blocked'].includes(selectedItem.status) ? (
+                      <button className="secondary danger" onClick={() => void handleCancel(selectedItem.id)}>Cancel</button>
+                    ) : null}
+                    {['failed', 'cancelled'].includes(selectedItem.status) ? (
+                      <button className="secondary" onClick={() => void handleRetry(selectedItem.id)}>Retry</button>
+                    ) : null}
+                  </div>
+
+                  <section>
+                    <h4>Routing</h4>
+                    <ul>
+                      <li>Agent mode: {selectedItem.agent_selection_mode}</li>
+                      <li>Assigned agent: {selectedItem.assigned_agent_id ?? '—'}</li>
+                      <li>Model profile: {selectedItem.model_profile}</li>
+                      <li>Capabilities: {selectedItem.required_capabilities.join(', ') || '—'}</li>
+                    </ul>
+                  </section>
+
+                  <section>
+                    <h4>Execution</h4>
+                    <ul>
+                      <li>Created: {selectedItem.created_at}</li>
+                      <li>Started: {selectedItem.started_at ?? '—'}</li>
+                      <li>Completed: {selectedItem.completed_at ?? '—'}</li>
+                      <li>Retries: {selectedItem.retry_count} / {selectedItem.max_retries}</li>
+                    </ul>
+                  </section>
+
+                  {selectedItem.result_summary ? (
+                    <section><h4>Result</h4><p>{selectedItem.result_summary}</p></section>
+                  ) : null}
+
+                  {selectedItem.error_message ? (
+                    <section><h4>Error</h4><pre className="memory-content">{selectedItem.error_message}</pre></section>
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <div className="detail-body"><section><p>Select a queue item to inspect it.</p></section></div>
+            )}
+          </article>
+        </Panel>
+      </Group>
     </section>
   )
 }

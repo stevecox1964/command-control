@@ -104,28 +104,53 @@ A coordinated multi-agent setup is stronger:
 - social/video worker
 - monitor/watcher
 
-## Suggested Minimal v1
+## What Is Built (Phase 1)
 
-Build a simple hub with:
+The task bus foundation is now live inside CC.
 
-1. **Agent registry**
-   - list available agents
-   - show role/capabilities/status
+### Task Definitions
 
-2. **Task bus**
-   - create task
-   - assign to agent
-   - mark running/completed/failed
+Each task definition specifies:
 
-3. **Event log**
-   - append notable events from agents/tasks
-   - render in CC
+- which agent is allowed to execute it (`assigned_agent_id`, `allowed_agent_ids`, `agent_selection_mode`)
+- what capabilities the executing agent must support (`required_capabilities`)
+- which model profile to use (`model_profile`, `reasoning_level`, `budget_policy`)
 
-4. **Handoff record**
-   - structured summary passed from one agent to another
+This means "Rufus does coding at coding_heavy" and "Dufus does review at high_reasoning" are now explicit first-class policies in the system, not implicit assumptions.
 
-5. **Shared memory pointers**
-   - link tasks/events to notes, decisions, and memory docs
+### Queue (Task Bus)
+
+The Queue is the live runtime counterpart to task definitions:
+
+- a `Run Now` action on any task definition creates a `QueueItem` + `TaskRun`, inheriting all routing constraints
+- an agent can claim a queue item only if it satisfies the routing policy
+- queue items can be cancelled, retried, completed, or failed via API
+- claim/complete/fail endpoints are ready for agent workers to hook into
+
+### Workflow Definitions
+
+Workflows chain task definitions into sequences:
+
+- each step references a task definition by ID
+- steps declare `on_success` and `on_failure` transitions
+- running a workflow creates a `WorkflowRun` and child `QueueItem`s per step, each with routing inherited from the step's task definition
+
+### Seed Agents and Tasks
+
+The system seeds with concrete examples:
+- Fetch docs page → fetcher_bot, token_light, cheap
+- Implement queue logic → Rufus (fixed), coding_heavy, premium
+- Review queue logic → Dufus (fixed), high_reasoning, balanced
+- Workflow: Rufus codes → Dufus reviews → Dufus pushes
+
+## Remaining for Full Hub
+
+1. **Agent capability registry** — real-time validation of agent capabilities against routing claims (currently policy fields exist but are not cross-checked against a live registry)
+2. **Event log** — append notable events from agents/tasks and render in CC
+3. **Handoff records** — structured summaries passed from one agent to another (currently handled via task output payloads only)
+4. **Shared memory pointers** — link tasks/events to notes, decisions, and memory docs
+5. **Dependency triggers** — automatically enqueue task B when task A completes
+6. **Schedule triggers** — background runner to fire tasks on a cron-style interval
 
 ## Big Picture
 
@@ -133,6 +158,6 @@ This fits the current product direction well:
 
 - **CC shows the graph and control surface**
 - **OpenClaw runs the agents**
-- **The hub coordinates the work**
+- **The task/queue/workflow layer coordinates the work**
 
 That turns CC into a real multi-agent operating layer, not just a chat UI.

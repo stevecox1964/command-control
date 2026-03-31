@@ -56,11 +56,33 @@ Long term, a dedicated mobile app makes more product sense than treating Telegra
 
 ### Tasks
 
-- CRUD for local tasks
-- Run-now execution with output capture
-- Recurring scheduling support
-- Execution history per task
-- Supports manual, shell, python, and simple web fetch task types
+The task system has been replaced with a clean three-layer domain model:
+
+**Layer 1 — Definitions (design time)**
+
+- **Task Definitions** — reusable templates with full agent routing and model policy
+- **Workflow Definitions** — ordered sequences of task definitions with step transitions
+
+**Layer 2 — Runtime**
+
+- **Queue** — live work items created from definitions, with inherited routing constraints
+- **Task Runs** — execution records linked to queue items and definitions
+- **Workflow Runs** — execution records for workflow instances and their child task runs
+
+**Task definition fields include:**
+
+- `task_type` — web_fetch, script, agent_job, coding, review, reminder, check, transform, notification, approval, custom
+- `agent_selection_mode` — fixed (pinned to one agent), pool (any in allowed list), auto
+- `assigned_agent_id` / `allowed_agent_ids` — explicit routing targets
+- `required_capabilities` — capabilities the executing agent must support
+- `model_profile` — token_light, balanced, coding_heavy, high_reasoning, premium
+- `reasoning_level` / `budget_policy` — planning signals for cost and quality control
+- `trigger_modes` — manual, schedule, event, dependency, workflow_only
+- `retry_policy`, `timeout_seconds`, `priority`
+
+Queue items inherit all routing and model policy from their source definition when created. An agent may only claim a queue item if it satisfies the routing policy (agent mode, allowed list, capabilities).
+
+**Seed data included:** Fetch docs page (token_light / fetcher_bot), Implement queue logic (coding_heavy / Rufus), Review queue logic (high_reasoning / Dufus), and a Rufus codes → Dufus reviews workflow.
 
 ### Agents
 
@@ -78,12 +100,24 @@ Long term, a dedicated mobile app makes more product sense than treating Telegra
 - Proxies OpenClaw health, status, session, gateway, and log information into the UI
 - Provides a basic operational dashboard for runtime visibility
 
-### Workflows and Settings
+### Workflows
 
-- Present as UI shells and placeholders today
-- Intended to become:
-  - **Workflows**: orchestration across tasks, agents, and triggers
-  - **Settings**: UI wrappers over OpenClaw-native config and secrets, not a separate credential store
+- Workflow definitions are reusable orchestrations composed of task definition references
+- Each step specifies which task definition to run, and `on_success` / `on_failure` transitions to the next step or a terminal state
+- Running a workflow creates a WorkflowRun and a child QueueItem for each step, with routing inherited from the referenced task definition
+- UI includes a step builder with task selector and transition config
+
+### Queue
+
+- Dedicated Queue page shows all live runtime work items
+- Filterable by status: queued, running, completed, failed, cancelled, blocked
+- Cancel and retry actions available per item
+- Detail panel shows full routing, execution timeline, result, and error
+
+### Settings
+
+- Present as a UI shell placeholder
+- Intended as a wrapper over OpenClaw-native config and secrets, not a separate credential store
 
 ## Current Stack
 
@@ -99,7 +133,7 @@ Long term, a dedicated mobile app makes more product sense than treating Telegra
 ### Backend
 
 - FastAPI
-- SQLite for CC-local app data such as tasks and UI-side state
+- SQLite for CC-local app data: task definitions, workflow definitions, queue items, task runs, workflow runs
 - Legacy SQLite memory-ingest code still exists in the backend but is no longer the primary memory path
 - OpenClaw CLI bridge endpoints
 - OpenClaw gateway chat proxy
@@ -110,9 +144,10 @@ Long term, a dedicated mobile app makes more product sense than treating Telegra
 CC currently uses two different data and control paths depending on the feature:
 
 1. **CC-local app data**
-   - tasks
-   - task runs
-   - other UI-owned metadata
+   - task definitions (reusable templates with routing + model policy)
+   - workflow definitions (step sequences referencing task definitions)
+   - queue items (live runtime work records)
+   - task runs and workflow runs (execution history)
    - some legacy memory-ingest code that still remains in the backend but is now deprecated
 
 2. **OpenClaw-native runtime data**
@@ -133,14 +168,14 @@ There are still some older backend paths in the repository from an earlier phase
 ```text
 command-control/
   backend/
-    app.py              # FastAPI server, task DB, legacy memory code, OpenClaw bridge, gateway chat proxy, native memory proxy
+    app.py              # FastAPI server — task/workflow/queue domain, legacy memory code, OpenClaw bridge, gateway chat proxy, native memory proxy
     requirements.txt
   src/
-    App.tsx             # Main app shell and page implementations
+    App.tsx             # Main app shell — TasksPage, WorkflowsPage, QueuePage, AgentsPage, MemoryPage, SystemPage
     App.css             # App styling
     lib/
       api.ts            # Older CC memory client (deprecated)
-      tasks.ts          # Task CRUD + run client
+      tasks.ts          # Task definitions, workflow definitions, queue, task runs, workflow runs — types + API client
       oc.ts             # OpenClaw status/session/log bridge client
       ocChat.ts         # OpenClaw agent list + gateway chat client
       ocMemory.ts       # OpenClaw native memory client
@@ -189,17 +224,41 @@ Default local ports:
 
 ### CC-local data
 
+**Task Definitions**
+- `GET /api/tasks` — list all
+- `POST /api/tasks` — create
+- `GET /api/tasks/{id}` — get one
+- `PUT /api/tasks/{id}` — update
+- `DELETE /api/tasks/{id}` — delete
+- `POST /api/tasks/{id}/run` — enqueue manual task run
+
+**Workflow Definitions**
+- `GET /api/workflows` — list all
+- `POST /api/workflows` — create
+- `GET /api/workflows/{id}` — get one
+- `PUT /api/workflows/{id}` — update
+- `DELETE /api/workflows/{id}` — delete
+- `POST /api/workflows/{id}/run` — enqueue manual workflow run
+
+**Queue**
+- `GET /api/queue` — list items (optional `?status=` filter)
+- `GET /api/queue/{id}` — get one
+- `POST /api/queue/{id}/cancel`
+- `POST /api/queue/{id}/retry`
+- `POST /api/queue/{id}/claim` — agent worker: mark running (validates routing policy)
+- `POST /api/queue/{id}/complete` — agent worker: mark completed
+- `POST /api/queue/{id}/fail` — agent worker: mark failed
+
+**Run History**
+- `GET /api/task-runs` — list (optional `?task_definition_id=` filter)
+- `GET /api/task-runs/{id}`
+- `GET /api/workflow-runs` — list (optional `?workflow_definition_id=` filter)
+- `GET /api/workflow-runs/{id}`
+
+**Legacy memory (retained, UI no longer depends on it)**
 - `GET /api/memory`
 - `GET /api/memory/{id}`
 - `POST /api/memory/ingest`
-- Legacy path retained for now; UI no longer depends on it
-- `GET /api/tasks`
-- `GET /api/tasks/{id}`
-- `POST /api/tasks`
-- `PUT /api/tasks/{id}`
-- `DELETE /api/tasks/{id}`
-- `POST /api/tasks/{id}/run`
-- `GET /api/tasks/{id}/runs`
 
 ### OpenClaw bridge
 
@@ -219,13 +278,27 @@ Default local ports:
 
 ## Near-Term Roadmap
 
-- Remove or quarantine the old parallel CC memory ingest path now that the UI is on OpenClaw-native memory
+**Task / Workflow / Queue (Phase 2)**
+- Active schedule trigger — background runner that enqueues task definitions on schedule
+- Dependency trigger — enqueue task B when task A completes successfully
+- Run Logs page under System for step-level audit trail
+- Queue polling / auto-refresh on the Queue page
+- Workflow step status tracking as individual steps complete
+
+**Agent routing**
+- Agent capability registry so the queue can validate routing claims against real agent data
+- Model profile → actual model mapping layer (one place to upgrade models without touching task definitions)
+
+**UI polish**
+- Runs history page showing task runs and workflow runs in one view
+- Task definition clone action
+- "Add to workflow" shortcut from the Tasks page
+
+**Platform**
+- Remove or quarantine the old parallel CC memory ingest path
 - Agent management UI as a wrapper over native OpenClaw agent configuration
-- Model and provider UI for defaults and assignment
 - Settings and secrets UI backed by OpenClaw-native config and secrets
 - Persistent chat history across page refreshes and reloads
-- Better session browsing and history tools when needed, without letting monitoring UI crowd the chat workspace
-- Workflow and pipeline orchestration UI
 - Stabilize CC as the primary daily chat surface before investing in Telegram-heavy flows or a mobile shell
 
 ## Product Constraint Worth Keeping
