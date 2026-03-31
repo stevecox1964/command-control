@@ -5,9 +5,9 @@ import { Group, Panel, Separator } from 'react-resizable-panels'
 // import { fetchMemoryDocument, fetchMemoryList, ingestMemory } from './lib/api'
 import { type OcMemoryFile, type OcMemoryFileContent, type OcMemorySearchResult, type OcMemoryStatus, fetchMemoryFiles, fetchMemoryFileContent, fetchMemoryStatus, searchMemory, reindexMemory } from './lib/ocMemory'
 import {
-  type TaskDefinition, type TaskRun, type WorkflowDefinition, type WorkflowStep, type QueueItem,
+  type TaskDefinition, type TaskDefinitionCreate, type TaskRun, type WorkflowDefinition, type WorkflowStep, type QueueItem,
   fetchTasks, createTask, updateTask, deleteTask, runTask, fetchTaskRuns,
-  fetchWorkflows, createWorkflow, updateWorkflow, deleteWorkflow, runWorkflow, fetchWorkflowRuns,
+  fetchWorkflows, createWorkflow, updateWorkflow, deleteWorkflow, runWorkflow,
   fetchQueue, cancelQueueItem, retryQueueItem,
 } from './lib/tasks'
 import { fetchOcHealth, fetchOcLogs, fetchOcSessions, fetchOcStatus } from './lib/oc'
@@ -540,7 +540,7 @@ function TasksPage() {
       priority: Number(form.priority) || 5,
       timeout_seconds: Number(form.timeout_seconds) || 300,
       tags: form.tags.split(',').map(s => s.trim()).filter(Boolean),
-    }
+    } as Partial<TaskDefinitionCreate>
   }
 
   async function handleSubmit(event: React.FormEvent) {
@@ -895,7 +895,6 @@ function WorkflowsPage() {
     if (!newStepTaskId) return
     const task = allTasks.find(t => t.id === newStepTaskId)
     const stepNum = steps.length + 1
-    const nextStepId = `step_${stepNum + 1}`
     setSteps([...steps, {
       step_id: `step_${stepNum}`,
       task_definition_id: newStepTaskId,
